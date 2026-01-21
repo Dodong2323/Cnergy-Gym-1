@@ -247,7 +247,13 @@ function getAttendance(PDO $pdo): void
                                       AND (s.end_date >= a.check_in OR DATE(s.end_date) >= DATE(a.check_in))
                                       AND s.plan_id IN (2, 3, 5, 6)
                                       ORDER BY 
-                                        CASE WHEN s.plan_id = 6 THEN 0 ELSE 1 END,
+                                        CASE 
+                                            WHEN s.plan_id = 2 THEN 0  -- Premium (highest priority)
+                                            WHEN s.plan_id = 3 THEN 1  -- Standard
+                                            WHEN s.plan_id = 5 THEN 2  -- Other monthly plans
+                                            WHEN s.plan_id = 6 THEN 3  -- Session (lowest priority)
+                                            ELSE 4
+                                        END,
                                         s.end_date DESC
                                       LIMIT 1)
                                  ) AS plan_name,
@@ -264,7 +270,13 @@ function getAttendance(PDO $pdo): void
                                       AND (s.end_date >= a.check_in OR DATE(s.end_date) >= DATE(a.check_in))
                                       AND s.plan_id IN (2, 3, 5, 6)
                                       ORDER BY 
-                                        CASE WHEN s.plan_id = 6 THEN 0 ELSE 1 END,
+                                        CASE 
+                                            WHEN s.plan_id = 2 THEN 0  -- Premium (highest priority)
+                                            WHEN s.plan_id = 3 THEN 1  -- Standard
+                                            WHEN s.plan_id = 5 THEN 2  -- Other monthly plans
+                                            WHEN s.plan_id = 6 THEN 3  -- Session (lowest priority)
+                                            ELSE 4
+                                        END,
                                         s.end_date DESC
                                       LIMIT 1)
                                  ) AS plan_id,
@@ -293,7 +305,13 @@ function getAttendance(PDO $pdo): void
                                   AND (s.end_date >= a.check_in OR DATE(s.end_date) >= DATE(a.check_in))
                                   AND s.plan_id IN (2, 3, 5, 6)
                                   ORDER BY 
-                                    CASE WHEN s.plan_id = 6 THEN 0 ELSE 1 END,
+                                    CASE 
+                                        WHEN s.plan_id = 2 THEN 0  -- Premium (highest priority)
+                                        WHEN s.plan_id = 3 THEN 1  -- Standard
+                                        WHEN s.plan_id = 5 THEN 2  -- Other monthly plans
+                                        WHEN s.plan_id = 6 THEN 3  -- Session (lowest priority)
+                                        ELSE 4
+                                    END,
                                     s.end_date DESC
                                   LIMIT 1) AS plan_name,
                                  (SELECT s.plan_id 
@@ -304,7 +322,13 @@ function getAttendance(PDO $pdo): void
                                   AND (s.end_date >= a.check_in OR DATE(s.end_date) >= DATE(a.check_in))
                                   AND s.plan_id IN (2, 3, 5, 6)
                                   ORDER BY 
-                                    CASE WHEN s.plan_id = 6 THEN 0 ELSE 1 END,
+                                    CASE 
+                                        WHEN s.plan_id = 2 THEN 0  -- Premium (highest priority)
+                                        WHEN s.plan_id = 3 THEN 1  -- Standard
+                                        WHEN s.plan_id = 5 THEN 2  -- Other monthly plans
+                                        WHEN s.plan_id = 6 THEN 3  -- Session (lowest priority)
+                                        ELSE 4
+                                    END,
                                     s.end_date DESC
                                   LIMIT 1) AS plan_id,
                                  CASE WHEN a.check_out IS NOT NULL
@@ -1071,8 +1095,19 @@ function handleQRScan(PDO $pdo, array $input): void
 
         // Use PHP date() to ensure correct timezone (Asia/Manila)
         $currentDateTime = date('Y-m-d H:i:s');
-        $insertStmt = $pdo->prepare("INSERT INTO `attendance` (user_id, check_in) VALUES (?, ?)");
-        $insertStmt->execute([(int) $userId, $currentDateTime]);
+        
+        // Check if attendance table has subscription_id column
+        $checkSubscriptionId = $pdo->query("SHOW COLUMNS FROM attendance LIKE 'subscription_id'");
+        $hasSubscriptionId = $checkSubscriptionId->rowCount() > 0;
+        
+        // Store subscription_id if available to ensure correct plan type detection
+        if ($hasSubscriptionId && isset($activePlan['id'])) {
+            $insertStmt = $pdo->prepare("INSERT INTO `attendance` (user_id, check_in, subscription_id) VALUES (?, ?, ?)");
+            $insertStmt->execute([(int) $userId, $currentDateTime, (int) $activePlan['id']]);
+        } else {
+            $insertStmt = $pdo->prepare("INSERT INTO `attendance` (user_id, check_in) VALUES (?, ?)");
+            $insertStmt->execute([(int) $userId, $currentDateTime]);
+        }
         $attendanceId = $pdo->lastInsertId();
 
         // Log activity using centralized logger (same as monitor_subscription.php)
@@ -1120,10 +1155,43 @@ function recordAttendance(PDO $pdo, array $input): void
         return;
     }
 
+    // Get active subscription to store subscription_id for correct plan type detection
+    $activePlan = null;
+    try {
+        $planStmt = $pdo->prepare("
+            SELECT s.id, s.plan_id, s.start_date, s.end_date, s.status_id,
+                   p.plan_name
+            FROM subscription s
+            JOIN member_subscription_plan p ON s.plan_id = p.id
+            WHERE s.user_id = ? 
+            AND s.plan_id IN (2, 3, 5, 6)
+            AND s.status_id = 2
+            AND s.end_date > NOW()
+            ORDER BY s.end_date DESC
+            LIMIT 1
+        ");
+        $planStmt->execute([(int) $userId]);
+        $activePlan = $planStmt->fetch();
+    } catch (Exception $e) {
+        error_log("ERROR in plan lookup for manual attendance: " . $e->getMessage());
+        // Continue without subscription_id if lookup fails
+    }
+
     // Use PHP date() to ensure correct timezone (Asia/Manila)
     $currentDateTime = date('Y-m-d H:i:s');
-    $insertStmt = $pdo->prepare("INSERT INTO `attendance` (user_id, check_in) VALUES (?, ?)");
-    $insertStmt->execute([(int) $userId, $currentDateTime]);
+    
+    // Check if attendance table has subscription_id column
+    $checkSubscriptionId = $pdo->query("SHOW COLUMNS FROM attendance LIKE 'subscription_id'");
+    $hasSubscriptionId = $checkSubscriptionId->rowCount() > 0;
+    
+    // Store subscription_id if available to ensure correct plan type detection
+    if ($hasSubscriptionId && $activePlan && isset($activePlan['id'])) {
+        $insertStmt = $pdo->prepare("INSERT INTO `attendance` (user_id, check_in, subscription_id) VALUES (?, ?, ?)");
+        $insertStmt->execute([(int) $userId, $currentDateTime, (int) $activePlan['id']]);
+    } else {
+        $insertStmt = $pdo->prepare("INSERT INTO `attendance` (user_id, check_in) VALUES (?, ?)");
+        $insertStmt->execute([(int) $userId, $currentDateTime]);
+    }
     $attendanceId = $pdo->lastInsertId();
 
     // Log activity using centralized logger (same as monitor_subscription.php)
@@ -1368,3 +1436,4 @@ function autoCheckoutExpiredGuests(PDO $pdo): void
 }
 
 // Guest session QR scanning function removed - guests will be handled through admin approval workflow
+Ay6ttttttttt;l
