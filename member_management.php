@@ -230,8 +230,16 @@ try {
         $checkColumnStmt = $pdo->query("SHOW COLUMNS FROM `user` LIKE 'deactivation_reason'");
         $hasDeactivationReason = $checkColumnStmt->rowCount() > 0;
 
-        if ($hasDeactivationReason) {
+        // Check if parent_consent_file_url column exists
+        $checkParentConsentStmt = $pdo->query("SHOW COLUMNS FROM `user` LIKE 'parent_consent_file_url'");
+        $hasParentConsent = $checkParentConsentStmt->rowCount() > 0;
+
+        if ($hasDeactivationReason && $hasParentConsent) {
+            $stmt = $pdo->query('SELECT id, fname, mname, lname, email, gender_id, bday, user_type_id, account_status, created_at, profile_photo_url, deactivation_reason, parent_consent_file_url FROM `user` WHERE user_type_id = 4 ORDER BY id DESC');
+        } else if ($hasDeactivationReason) {
             $stmt = $pdo->query('SELECT id, fname, mname, lname, email, gender_id, bday, user_type_id, account_status, created_at, profile_photo_url, deactivation_reason FROM `user` WHERE user_type_id = 4 ORDER BY id DESC');
+        } else if ($hasParentConsent) {
+            $stmt = $pdo->query('SELECT id, fname, mname, lname, email, gender_id, bday, user_type_id, account_status, created_at, profile_photo_url, parent_consent_file_url FROM `user` WHERE user_type_id = 4 ORDER BY id DESC');
         } else {
             $stmt = $pdo->query('SELECT id, fname, mname, lname, email, gender_id, bday, user_type_id, account_status, created_at, profile_photo_url FROM `user` WHERE user_type_id = 4 ORDER BY id DESC');
         }
@@ -245,8 +253,16 @@ try {
         $checkColumnStmt = $pdo->query("SHOW COLUMNS FROM `user` LIKE 'deactivation_reason'");
         $hasDeactivationReason = $checkColumnStmt->rowCount() > 0;
 
-        if ($hasDeactivationReason) {
+        // Check if parent_consent_file_url column exists
+        $checkParentConsentStmt = $pdo->query("SHOW COLUMNS FROM `user` LIKE 'parent_consent_file_url'");
+        $hasParentConsent = $checkParentConsentStmt->rowCount() > 0;
+
+        if ($hasDeactivationReason && $hasParentConsent) {
+            $stmt = $pdo->prepare('SELECT id, fname, mname, lname, email, gender_id, bday, user_type_id, account_status, created_at, profile_photo_url, deactivation_reason, parent_consent_file_url FROM `user` WHERE id = ?');
+        } else if ($hasDeactivationReason) {
             $stmt = $pdo->prepare('SELECT id, fname, mname, lname, email, gender_id, bday, user_type_id, account_status, created_at, profile_photo_url, deactivation_reason FROM `user` WHERE id = ?');
+        } else if ($hasParentConsent) {
+            $stmt = $pdo->prepare('SELECT id, fname, mname, lname, email, gender_id, bday, user_type_id, account_status, created_at, profile_photo_url, parent_consent_file_url FROM `user` WHERE id = ?');
         } else {
             $stmt = $pdo->prepare('SELECT id, fname, mname, lname, email, gender_id, bday, user_type_id, account_status, created_at, profile_photo_url FROM `user` WHERE id = ?');
         }

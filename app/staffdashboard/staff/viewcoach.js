@@ -24,7 +24,6 @@ import {
   Search,
   Plus,
   Edit,
-  Trash2,
   Activity,
   ChevronLeft,
   ChevronRight,
@@ -74,27 +73,27 @@ const validateEmail = (email) => {
 const generateCoachPassword = (fname, mname, lname) => {
   // Get first 2 letters of first name: both lowercase
   const first = (fname || "").trim()
-  const firstNamePart = first.length > 0 
+  const firstNamePart = first.length > 0
     ? (first.substring(0, 2).toLowerCase())
     : ""
-  
+
   // Get first 2 letters of middle name ONLY if it exists: both lowercase (optional)
   const middle = (mname && mname.trim() !== "") ? mname.trim() : ""
   const middleNamePart = middle.length > 0
     ? (middle.substring(0, 2).toLowerCase())
     : ""
-  
+
   // Get first 2 letters of last name: all lowercase
   const last = (lname || "").trim()
-  const lastNamePart = last.length > 0 
+  const lastNamePart = last.length > 0
     ? last.substring(0, 2).toLowerCase()
     : ""
-  
+
   // Combine: Co + FirstName2(lowercase) + MiddleName2(lowercase, if exists) + #2023 + LastName2(lowercase)
   return `Co${firstNamePart}${middleNamePart}#2023${lastNamePart}`
 }
 
-const ViewCoach = ({ userId }) => {
+const ViewCoach = () => {
   const [coaches, setCoaches] = useState([])
   const [filteredCoaches, setFilteredCoaches] = useState([])
   const [searchQuery, setSearchQuery] = useState("")
@@ -111,6 +110,7 @@ const ViewCoach = ({ userId }) => {
   const [coachStats, setCoachStats] = useState({
     totalCoaches: 0,
     availableCoaches: 0,
+    unavailableCoaches: 0,
     averageRating: 0,
     averagePerSessionRate: 0,
     totalClients: 0,
@@ -127,6 +127,13 @@ const ViewCoach = ({ userId }) => {
     per_session_rate: false,
     monthly_rate: false,
   })
+
+  useEffect(() => {
+    setFormData((prev) => ({
+      ...prev,
+      specialty: selectedSpecialties.join(", "),
+    }))
+  }, [selectedSpecialties])
 
   const coachesPerPage = 5
   const indexOfLastCoach = currentPage * coachesPerPage
@@ -148,8 +155,8 @@ const ViewCoach = ({ userId }) => {
     bio: "",
     specialty: "",
     experience: "",
-    per_session_rate: "",
-    monthly_rate: "",
+    per_session_rate: "300",
+    monthly_rate: "3200",
     certifications: "",
     is_available: true,
     image_url: "",
@@ -189,7 +196,7 @@ const ViewCoach = ({ userId }) => {
 
     // Name validations
     if (!data.fname.trim()) errors.fname = "First name is required"
-    if (!data.mname.trim()) errors.mname = "Middle name is required"
+    // Middle name is optional - no validation needed
     if (!data.lname.trim()) errors.lname = "Last name is required"
 
     // Email validation
@@ -221,24 +228,22 @@ const ViewCoach = ({ userId }) => {
       const age = today.getFullYear() - birthDate.getFullYear()
       const monthDiff = today.getMonth() - birthDate.getMonth()
       const dayDiff = today.getDate() - birthDate.getDate()
-      
+
       // Calculate exact age
       let exactAge = age
       if (monthDiff < 0 || (monthDiff === 0 && dayDiff < 0)) {
         exactAge--
       }
-      
+
       if (exactAge < 18) {
         errors.bday = "Coach must be at least 18 years old"
       }
     }
-    if (!data.gender_id) errors.gender_id = "Please select a gender"
-    if (data.gender_id && ![1, 2].includes(Number.parseInt(data.gender_id))) {
-      errors.gender_id = "Please select a valid gender"
-    }
-    if (!data.specialty) errors.specialty = "Please specify a specialty"
+    // Gender validation removed - coaches will set it themselves
+    if (!data.specialty && selectedSpecialties.length === 0) errors.specialty = "Please specify at least one specialty"
     if (!data.experience) errors.experience = "Please specify experience level"
-    if (!data.per_session_rate) errors.per_session_rate = "Please set a per session rate"
+    // Per session rate has default value (300), so validation not required
+    // Monthly rate has default value (3200), so validation not required
 
     // Package sessions validation
     if (data.package_sessions && (isNaN(data.package_sessions) || data.package_sessions < 1)) {
@@ -264,11 +269,20 @@ const ViewCoach = ({ userId }) => {
     }))
 
     // Mark field as touched if it's one of the rate fields and the value has changed from default
-    if ((name === "per_session_rate" || name === "monthly_rate") && value !== "") {
-      setTouchedFields((prev) => ({
-        ...prev,
-        [name]: true,
-      }))
+    if (name === "per_session_rate") {
+      if (value !== "300") {
+        setTouchedFields((prev) => ({
+          ...prev,
+          per_session_rate: true,
+        }))
+      }
+    } else if (name === "monthly_rate") {
+      if (value !== "3200") {
+        setTouchedFields((prev) => ({
+          ...prev,
+          monthly_rate: true,
+        }))
+      }
     }
 
     // Clear validation error when user starts typing
@@ -412,16 +426,17 @@ const ViewCoach = ({ userId }) => {
           specialtyMap[spec] = (specialtyMap[spec] || 0) + 1
         })
       })
-
       const specialtyDistribution = Object.entries(specialtyMap)
         .map(([specialty, count]) => ({ specialty, count }))
         .sort((a, b) => b.count - a.count)
 
-      // Get recent activities from activity logs
-      const recentActivities = activityLogs.slice(0, 10).map(log => ({
-        activity: log.activity || log.description || 'Activity',
-        timestamp: log.timestamp || log.created_at || new Date().toISOString()
-      }))
+      // Generate recent activities (mock data based on coach updates)
+      const recentActivities = activeCoaches
+        .slice(0, 10)
+        .map(coach => ({
+          activity: `${coach.fullName} is available for training`,
+          timestamp: new Date().toISOString()
+        }))
 
       setCoachStats({
         totalCoaches,
@@ -434,9 +449,21 @@ const ViewCoach = ({ userId }) => {
         recentActivities
       })
 
+      // Update activities
       setActivities(recentActivities)
     } catch (error) {
       console.error("Error calculating coach statistics:", error)
+      // Set default stats on error
+      setCoachStats({
+        totalCoaches: 0,
+        availableCoaches: 0,
+        unavailableCoaches: 0,
+        averageRating: '0.0',
+        averagePerSessionRate: '0.00',
+        totalClients: 0,
+        specialtyDistribution: [],
+        recentActivities: []
+      })
     }
   }
 
@@ -470,8 +497,9 @@ const ViewCoach = ({ userId }) => {
     }
 
     return activities.filter(activity => {
+      if (!activity || !activity.timestamp) return false
       const activityDate = new Date(activity.timestamp)
-      return activityDate >= filterDate
+      return !isNaN(activityDate.getTime()) && activityDate >= filterDate
     })
   }
 
@@ -480,7 +508,7 @@ const ViewCoach = ({ userId }) => {
     fetchActivityLogs()
   }, [])
 
-  // Recalculate stats when coaches data changes
+  // Calculate stats when coaches data changes
   useEffect(() => {
     fetchCoachStats()
   }, [coaches])
@@ -553,30 +581,39 @@ const ViewCoach = ({ userId }) => {
       const formattedData = {
         // User table data
         fname: formData.fname,
-        mname: formData.mname,
+        mname: formData.mname && formData.mname.trim() !== '' ? formData.mname.trim() : '',
         lname: formData.lname,
         email: formData.email,
         password: generatedPassword,
-        gender_id: Number.parseInt(formData.gender_id),
+        gender_id: 1, // Default to Male (1) - coaches will update it themselves
         bday: formData.bday,
         user_type_id: Number.parseInt(formData.user_type_id),
         failed_attempt: 0,
 
         // Coaches table data
         bio: formData.bio || "",
-        specialty: formData.specialty,
+        specialty: selectedSpecialties.length > 0 ? selectedSpecialties : formData.specialty,
         experience: formData.experience,
-        per_session_rate: Number.parseFloat(formData.per_session_rate) || 0.0,
+        per_session_rate: Number.parseFloat(formData.per_session_rate) || 300.0,
         package_rate: formData.package_rate ? Number.parseFloat(formData.package_rate) : null,
         package_sessions: formData.package_sessions ? Number.parseInt(formData.package_sessions) : null,
-        monthly_rate: formData.monthly_rate ? Number.parseFloat(formData.monthly_rate) : null,
-        certifications: formData.certifications || "",
-        is_available: formData.is_available,
-        image_url: formData.image_url || "",
+        monthly_rate: Number.parseFloat(formData.monthly_rate) || 3200.0,
+        certifications: "", // Coaches will set this themselves
+        is_available: true, // Default to available - coaches will update it themselves
+        image_url: "", // Coaches will set this themselves
       }
 
-      const response = await axios.post(`${API_URL}?staff_id=${userId}`, formattedData)
+      const response = await axios.post(API_URL, formattedData)
       if (response.data.success) {
+        // Format coach's full name for toast notification
+        const fullName = `${formData.fname}${formData.mname ? ` ${formData.mname}` : ''} ${formData.lname}`.trim()
+
+        // Show success toast with better formatting
+        toast({
+          title: "Coach Successfully Added",
+          description: `${fullName} has been added to the system. Email: ${formData.email}. Account is ready to use.`,
+        })
+
         // Refresh coaches list
         const getResponse = await axios.get(API_URL)
         const updatedCoaches = getResponse.data.coaches || []
@@ -596,18 +633,11 @@ const ViewCoach = ({ userId }) => {
 
         setCoaches(enhancedCoaches)
         setFilteredCoaches(enhancedCoaches)
+        resetForm()
         setIsAddDialogOpen(false)
 
-        // Refresh statistics and activity logs
-        fetchCoachStats()
+        // Refresh activity logs (stats will be recalculated automatically via useEffect)
         await fetchActivityLogs()
-
-        const fullName = `${formData.fname} ${formData.mname} ${formData.lname}`.trim()
-        toast({
-          title: "Coach Successfully Added",
-          description: `${fullName} has been added to the system. Email: ${formData.email}. Account is ready to use.`,
-        })
-        resetForm()
       } else {
         // Handle API error response (like email already exists)
         console.error("Coach creation failed:", response.data)
@@ -672,23 +702,23 @@ const ViewCoach = ({ userId }) => {
         id: selectedCoach.id,
         // User table data
         fname: formData.fname,
-        mname: formData.mname,
+        mname: formData.mname && formData.mname.trim() !== '' ? formData.mname.trim() : '',
         lname: formData.lname,
         email: formData.email,
-        gender_id: Number.parseInt(formData.gender_id),
+        gender_id: selectedCoach.gender_id || 1, // Keep existing coach gender_id, default to 1 if not set
         bday: formData.bday,
         user_type_id: Number.parseInt(formData.user_type_id),
-        account_status: formData.account_status,
+        account_status: selectedCoach.account_status || "approved", // Keep existing account_status - use deactivate button to change
 
         // Coaches table data
-        bio: formData.bio || "",
-        specialty: formData.specialty,
+        bio: selectedCoach.bio || "", // Keep existing bio value - coaches manage it themselves
+        specialty: selectedSpecialties.length > 0 ? selectedSpecialties : formData.specialty,
         experience: formData.experience,
         per_session_rate: Number.parseFloat(formData.per_session_rate) || 0.0,
         monthly_rate: formData.monthly_rate ? Number.parseFloat(formData.monthly_rate) : null,
-        certifications: formData.certifications || "",
-        is_available: formData.is_available,
-        image_url: formData.image_url || "",
+        certifications: selectedCoach.certifications || "", // Keep existing certifications - coaches manage it themselves
+        is_available: selectedCoach.is_available !== undefined ? selectedCoach.is_available : true, // Keep existing availability - coaches manage it themselves
+        image_url: selectedCoach.image_url || "", // Keep existing image_url - coaches manage it themselves
       }
 
       console.log("Updating coach with data:", updateData)
@@ -699,7 +729,7 @@ const ViewCoach = ({ userId }) => {
         updateData.password = formData.password
       }
 
-      const response = await axios.put(`${API_URL}?staff_id=${userId}`, updateData, {
+      const response = await axios.put(API_URL, updateData, {
         headers: {
           "Content-Type": "application/json",
         },
@@ -748,9 +778,10 @@ const ViewCoach = ({ userId }) => {
         setCoaches(enhancedCoaches)
         setFilteredCoaches(enhancedCoaches)
         setIsEditDialogOpen(false)
+        setSelectedCoach(null)
+        resetForm()
 
-        // Refresh statistics and activity logs
-        fetchCoachStats()
+        // Refresh activity logs (stats will be recalculated automatically via useEffect)
         await fetchActivityLogs()
 
         const coachName = `${formData.fname}${formData.mname ? ` ${formData.mname}` : ''} ${formData.lname}`.trim()
@@ -790,6 +821,51 @@ const ViewCoach = ({ userId }) => {
     setIsAddDialogOpen(true)
   }
 
+  // Ensure form is properly reset when Add Coach dialog opens
+  useEffect(() => {
+    if (isAddDialogOpen) {
+      // Reset form completely when Add dialog opens - clear any edit data
+      setFormData({
+        fname: "",
+        mname: "",
+        lname: "",
+        email: "",
+        password: "",
+        gender_id: "",
+        bday: "",
+        user_type_id: 3,
+        bio: "",
+        specialty: "",
+        experience: "",
+        per_session_rate: "300",
+        package_rate: "",
+        package_sessions: "",
+        monthly_rate: "3200",
+        certifications: "",
+        is_available: true,
+        image_url: "",
+        account_status: "approved",
+      })
+      setSelectedSpecialties([])
+      setCustomSpecialty("")
+      setValidationErrors({})
+      setShowPassword(false)
+      setSelectedCoach(null) // Clear selected coach to ensure no edit data persists
+      setTouchedFields({
+        per_session_rate: false,
+        monthly_rate: false,
+      })
+    }
+  }, [isAddDialogOpen])
+
+  // Clear form data when Edit dialog closes (but not when opening Add dialog)
+  useEffect(() => {
+    if (!isEditDialogOpen && !isAddDialogOpen) {
+      // Only clear selectedCoach if both dialogs are closed
+      setSelectedCoach(null)
+    }
+  }, [isEditDialogOpen, isAddDialogOpen])
+
   const handleEditCoach = (coach) => {
     console.log("Editing coach:", coach)
     console.log("Coach account_status:", coach.account_status)
@@ -827,6 +903,7 @@ const ViewCoach = ({ userId }) => {
     setValidationErrors({})
     setIsEditDialogOpen(true)
   }
+
 
   const handleDeactivateCoach = (coach) => {
     setSelectedCoach(coach)
@@ -1018,11 +1095,10 @@ const ViewCoach = ({ userId }) => {
             <div className="flex items-center gap-2">
               <Button
                 onClick={() => setCurrentView(currentView === "active" ? "archive" : "active")}
-                className={`h-10 px-4 font-medium transition-all ${
-                  currentView === "active"
-                    ? "bg-white text-gray-900 border-2 border-gray-200 hover:bg-gray-50 shadow-sm"
-                    : "bg-gray-100 text-gray-700 border-2 border-gray-200 hover:bg-gray-200"
-                }`}
+                className={`h-10 px-4 font-medium transition-all ${currentView === "active"
+                  ? "bg-white text-gray-900 border-2 border-gray-200 hover:bg-gray-50 shadow-sm"
+                  : "bg-gray-100 text-gray-700 border-2 border-gray-200 hover:bg-gray-200"
+                  }`}
               >
                 {currentView === "active" ? "Active Coach" : "Deactivated"}
               </Button>
@@ -1994,6 +2070,7 @@ const ViewCoach = ({ userId }) => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
     </div>
   )
 }

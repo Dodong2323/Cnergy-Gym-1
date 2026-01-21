@@ -214,6 +214,8 @@ function getSalesData($pdo)
 	$month = $_GET['month'] ?? '';
 	$year = $_GET['year'] ?? '';
 	$customDate = $_GET['custom_date'] ?? '';
+	$startDate = $_GET['start_date'] ?? '';
+	$endDate = $_GET['end_date'] ?? '';
 
 	// Build WHERE conditions
 	$whereConditions = [];
@@ -224,8 +226,18 @@ function getSalesData($pdo)
 		$params[] = $saleType;
 	}
 
-	// Handle custom date first (highest priority)
-	if ($customDate) {
+	// Handle date range first (highest priority)
+	if ($startDate || $endDate) {
+		if ($startDate) {
+			$whereConditions[] = "DATE(s.sale_date) >= ?";
+			$params[] = $startDate;
+		}
+		if ($endDate) {
+			$whereConditions[] = "DATE(s.sale_date) <= ?";
+			$params[] = $endDate;
+		}
+	} elseif ($customDate) {
+		// Handle custom date (single date)
 		$whereConditions[] = "DATE(s.sale_date) = ?";
 		$params[] = $customDate;
 	} elseif ($month && $month !== 'all' && $year && $year !== 'all') {
@@ -277,7 +289,17 @@ function getSalesData($pdo)
 			$guestDateConditions = [];
 			$guestParams = [];
 
-			if ($customDate) {
+			// Handle date range first (highest priority)
+			if ($startDate || $endDate) {
+				if ($startDate) {
+					$guestDateConditions[] = "DATE(gs.created_at) >= ?";
+					$guestParams[] = $startDate;
+				}
+				if ($endDate) {
+					$guestDateConditions[] = "DATE(gs.created_at) <= ?";
+					$guestParams[] = $endDate;
+				}
+			} elseif ($customDate) {
 				$guestDateConditions[] = "DATE(gs.created_at) = ?";
 				$guestParams[] = $customDate;
 			} elseif ($month && $month !== 'all' && $year && $year !== 'all') {
@@ -1671,13 +1693,26 @@ function getAnalyticsData($pdo)
 	$month = $_GET['month'] ?? '';
 	$year = $_GET['year'] ?? '';
 	$customDate = $_GET['custom_date'] ?? '';
+	$startDate = $_GET['start_date'] ?? '';
+	$endDate = $_GET['end_date'] ?? '';
 
 	// Build date condition based on period and filters
 	$dateCondition = "";
 	$params = [];
 
-	// Handle custom date first (highest priority)
-	if ($customDate) {
+	// Handle date range first (highest priority)
+	if ($startDate || $endDate) {
+		$conditions = [];
+		if ($startDate) {
+			$conditions[] = "DATE(sale_date) >= ?";
+			$params[] = $startDate;
+		}
+		if ($endDate) {
+			$conditions[] = "DATE(sale_date) <= ?";
+			$params[] = $endDate;
+		}
+		$dateCondition = implode(" AND ", $conditions);
+	} elseif ($customDate) {
 		$dateCondition = "DATE(sale_date) = ?";
 		$params[] = $customDate;
 	} elseif ($month && $month !== 'all' && $year && $year !== 'all') {
@@ -1754,8 +1789,19 @@ function getAnalyticsData($pdo)
 	// Build params array for this query (excluding saleType param)
 	$salesBreakdownParams = [];
 
-	// Build date params (same logic as before, but we need to rebuild the params array without the saleType param)
-	if ($customDate) {
+	// Build date params for sales breakdown (use same date condition as period sales)
+	// Rebuild params array for sales breakdown query (same date params, no saleType param)
+	$salesBreakdownParams = [];
+
+	// Handle date range first (highest priority)
+	if ($startDate || $endDate) {
+		if ($startDate) {
+			$salesBreakdownParams[] = $startDate;
+		}
+		if ($endDate) {
+			$salesBreakdownParams[] = $endDate;
+		}
+	} elseif ($customDate) {
 		$salesBreakdownParams[] = $customDate;
 	} elseif ($month && $month !== 'all' && $year && $year !== 'all') {
 		$salesBreakdownParams[] = $month;
@@ -1810,7 +1856,9 @@ function getAnalyticsData($pdo)
 			"subscriptionSales" => (float) $salesBreakdown['subscription_sales'],
 			"coachAssignmentSales" => (float) $coachSales,
 			"walkinSales" => (float) $walkinSales,
-			"totalSales" => (float) $periodSales
+			"totalSales" => (float) $periodSales,
+			"totalProductSales" => (float) $salesBreakdown['product_sales'],
+			"totalSubscriptionSales" => (float) $salesBreakdown['subscription_sales']
 		]
 	]);
 }

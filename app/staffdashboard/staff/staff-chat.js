@@ -25,29 +25,53 @@ import {
     CheckCheck,
     Ticket,
     AlertCircle,
+    Headphones,
+    CheckCircle2,
+    ArrowLeft,
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { format, formatDistanceToNow, isToday, isYesterday } from "date-fns"
 import { cn } from "@/lib/utils"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 const SUPPORT_API_URL = "https://api.cnergy.site/support_tickets.php"
 
-const StaffChat = ({ userId: propUserId }) => {
+const TICKET_TOAST_STYLE = {
+    position: "fixed",
+    top: "1rem",
+    right: "1rem",
+    bottom: "auto",
+    left: "auto",
+    minWidth: "280px",
+    zIndex: 9999,
+}
+
+const AdminChat = ({ userId: propUserId }) => {
     // Try to get userId from prop, sessionStorage, or state
     const [userId, setUserId] = useState(() => {
         // First try prop
         if (propUserId) {
-            console.log("StaffChat: Initializing with userId from prop:", propUserId)
+            console.log("AdminChat: Initializing with userId from prop:", propUserId)
             return propUserId
         }
         // Then try sessionStorage (client-side only)
         if (typeof window !== 'undefined') {
             const stored = sessionStorage.getItem("user_id")
             if (stored) {
-                console.log("StaffChat: Initializing with userId from sessionStorage:", stored)
+                console.log("AdminChat: Initializing with userId from sessionStorage:", stored)
                 return parseInt(stored)
             }
-            console.log("StaffChat: No userId found in prop or sessionStorage")
+            console.log("AdminChat: No userId found in prop or sessionStorage")
         }
         return null
     })
@@ -63,9 +87,11 @@ const StaffChat = ({ userId: propUserId }) => {
     const [isSending, setIsSending] = useState(false)
     const [ticketCount, setTicketCount] = useState(0)
     const [searchQuery, setSearchQuery] = useState("")
-    const [statusFilter, setStatusFilter] = useState("all")
+    const [statusFilter, setStatusFilter] = useState("all") // Keep for compatibility but not used for filtering
+    const [activeTab, setActiveTab] = useState("pending") // Tab for "Pending", "In Progress", and "Resolved"
     const [isLoadingMessages, setIsLoadingMessages] = useState(false)
     const [userIdLoadingTimeout, setUserIdLoadingTimeout] = useState(false)
+    const [isResolveDialogOpen, setIsResolveDialogOpen] = useState(false)
     const messagesEndRef = useRef(null)
     const messageInputRef = useRef(null)
     const { toast } = useToast()
@@ -73,7 +99,7 @@ const StaffChat = ({ userId: propUserId }) => {
     // Sync userId from prop when it changes, and periodically check sessionStorage
     useEffect(() => {
         if (propUserId) {
-            console.log("StaffChat: Received userId from prop:", propUserId)
+            console.log("AdminChat: Received userId from prop:", propUserId)
             setUserId(propUserId)
         } else if (typeof window !== 'undefined') {
             // Try to get from sessionStorage if prop is not available
@@ -81,7 +107,7 @@ const StaffChat = ({ userId: propUserId }) => {
                 const stored = sessionStorage.getItem("user_id")
                 if (stored) {
                     const parsed = parseInt(stored)
-                    console.log("StaffChat: Found userId in sessionStorage:", parsed)
+                    console.log("AdminChat: Found userId in sessionStorage:", parsed)
                     if (parsed && parsed !== userId) {
                         setUserId(parsed)
                     }
@@ -129,16 +155,16 @@ const StaffChat = ({ userId: propUserId }) => {
                     "Content-Type": "application/json",
                 },
             })
-            
+
             if (!response.ok) {
                 const errorText = await response.text()
                 console.error("Error fetching tickets:", response.status, errorText)
                 throw new Error(`HTTP error! status: ${response.status}`)
             }
-            
+
             const data = await response.json()
             console.log("Support tickets response:", data)
-            
+
             // Handle response - can be array directly or wrapped in success
             let tickets = []
             if (Array.isArray(data)) {
@@ -148,21 +174,22 @@ const StaffChat = ({ userId: propUserId }) => {
             } else if (data.tickets && Array.isArray(data.tickets)) {
                 tickets = data.tickets
             }
-            
+
             // Sort by created_at descending (newest first)
             const sortedData = tickets.sort((a, b) => {
                 const dateA = new Date(a.created_at || a.last_message_at || 0)
                 const dateB = new Date(b.created_at || b.last_message_at || 0)
                 return dateB - dateA
             })
-            
+
             setSupportTickets(sortedData)
-            
-            // Count pending and in_progress tickets
+
+            // Count only in_progress tickets (excluding pending and resolved)
             const activeTickets = sortedData.filter(
-                ticket => ticket.status === 'pending' || ticket.status === 'in_progress'
+                ticket => ticket.status === 'in_progress'
             ).length
             setTicketCount(activeTickets)
+
         } catch (error) {
             console.error("Error fetching support tickets:", error)
             setSupportTickets([])
@@ -180,35 +207,49 @@ const StaffChat = ({ userId: propUserId }) => {
             setIsLoadingMessages(true)
             const adminIdParam = userId ? `&admin_id=${userId}` : ''
             const url = `${SUPPORT_API_URL}?action=get_ticket_messages&ticket_id=${ticketId}${adminIdParam}`
-            console.log("Fetching ticket messages from:", url)
-            
+            console.log("🔍 [fetchTicketMessages] Fetching from:", url)
+
             const response = await fetch(url, {
                 method: "GET",
                 headers: {
                     "Content-Type": "application/json",
                 },
             })
-            
+
             if (!response.ok) {
                 const errorText = await response.text()
-                console.error("Error fetching ticket messages:", response.status, errorText)
+                console.error("🔍 [fetchTicketMessages] Error:", response.status, errorText)
                 throw new Error(`HTTP error! status: ${response.status}`)
             }
-            
+
             const data = await response.json()
-            console.log("Ticket messages response:", data)
-            
+            console.log("🔍 [fetchTicketMessages] Response:", data)
+
             if (data.success && data.messages) {
+                console.log("🔍 [fetchTicketMessages] Messages received:", data.messages)
+                console.log("🔍 [fetchTicketMessages] Number of messages:", data.messages.length)
+                data.messages.forEach((msg, index) => {
+                    console.log(`🔍 [fetchTicketMessages] Message ${index + 1}:`, {
+                        id: msg.id,
+                        created_at: msg.created_at,
+                        timestamp: msg.timestamp,
+                        message: msg.message?.substring(0, 50) + "...",
+                        sender_name: msg.sender_name,
+                        user_type_id: msg.user_type_id
+                    })
+                })
                 setMessages(data.messages)
                 setTimeout(() => scrollToBottom(), 100)
             } else if (data.messages && Array.isArray(data.messages)) {
+                console.log("🔍 [fetchTicketMessages] Messages array received:", data.messages)
                 setMessages(data.messages)
                 setTimeout(() => scrollToBottom(), 100)
             } else {
+                console.log("🔍 [fetchTicketMessages] No messages found")
                 setMessages([])
             }
         } catch (error) {
-            console.error("Error fetching ticket messages:", error)
+            console.error("🔍 [fetchTicketMessages] Error:", error)
             toast({
                 title: "Error",
                 description: `Failed to fetch messages: ${error.message}`,
@@ -217,6 +258,44 @@ const StaffChat = ({ userId: propUserId }) => {
             setMessages([])
         } finally {
             setIsLoadingMessages(false)
+        }
+    }
+
+    const updateTicketStatus = async (ticketId, status) => {
+        if (!ticketId || !status) return
+
+        try {
+            const response = await fetch(SUPPORT_API_URL, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                body: JSON.stringify({
+                    action: "update_status",
+                    ticket_id: ticketId,
+                    status,
+                    admin_id: userId,
+                }),
+            })
+
+            if (!response.ok) {
+                const errorText = await response.text()
+                console.error(`🔍 [updateTicketStatus] failed to set ${status}:`, response.status, errorText)
+                return
+            }
+
+            const data = await response.json()
+            if (data.success) {
+                setSupportTickets(prev =>
+                    prev.map(t => (t.id === ticketId ? { ...t, status } : t))
+                )
+                if (selectedTicket?.id === ticketId) {
+                    setSelectedTicket(prev => prev ? { ...prev, status } : prev)
+                }
+            }
+        } catch (error) {
+            console.error("🔍 [updateTicketStatus] error:", error)
         }
     }
 
@@ -239,9 +318,9 @@ const StaffChat = ({ userId: propUserId }) => {
                     sender_id: userId,
                     message: messageText,
                 }
-                
+
                 console.log("Sending ticket message:", requestBody)
-                
+
                 const response = await fetch(SUPPORT_API_URL, {
                     method: "POST",
                     headers: {
@@ -270,14 +349,12 @@ const StaffChat = ({ userId: propUserId }) => {
                 console.log("Send message response data:", data)
 
                 if (data.success) {
+                    // Mark ticket as in_progress since reply was sent
+                    await updateTicketStatus(selectedTicket.id, "in_progress")
                     // Refresh messages
                     await fetchTicketMessages(selectedTicket.id)
                     // Refresh tickets list
                     await fetchSupportTickets()
-                    toast({
-                        title: "Success",
-                        description: "Message sent successfully.",
-                    })
                 } else {
                     throw new Error(data.error || data.message || "Failed to send message")
                 }
@@ -295,8 +372,8 @@ const StaffChat = ({ userId: propUserId }) => {
         }
     }
 
-    // Update ticket status
-    const handleUpdateStatus = async (newStatus) => {
+    // Handle resolve ticket
+    const handleResolveTicket = async () => {
         if (!userId || !selectedTicket) {
             return
         }
@@ -305,12 +382,12 @@ const StaffChat = ({ userId: propUserId }) => {
             const requestBody = {
                 action: "update_status",
                 ticket_id: selectedTicket.id,
-                status: newStatus,
+                status: "resolved",
                 admin_id: userId,
             }
-            
-            console.log("Updating ticket status:", requestBody)
-            
+
+            console.log("🔍 [handleResolveTicket] Resolving ticket:", requestBody)
+
             const response = await fetch(SUPPORT_API_URL, {
                 method: "POST",
                 headers: {
@@ -320,12 +397,10 @@ const StaffChat = ({ userId: propUserId }) => {
                 body: JSON.stringify(requestBody),
             })
 
-            console.log("Update status response status:", response.status)
-
             if (!response.ok) {
                 const errorText = await response.text()
-                console.error("Error updating status:", response.status, errorText)
-                let errorMessage = "Failed to update status"
+                console.error("🔍 [handleResolveTicket] Error:", response.status, errorText)
+                let errorMessage = "Failed to resolve ticket"
                 try {
                     const errorData = JSON.parse(errorText)
                     errorMessage = errorData.error || errorData.message || errorMessage
@@ -336,23 +411,31 @@ const StaffChat = ({ userId: propUserId }) => {
             }
 
             const data = await response.json()
-            console.log("Update status response data:", data)
+            console.log("🔍 [handleResolveTicket] Response:", data)
 
             if (data.success) {
-                setSelectedTicket({ ...selectedTicket, status: newStatus })
+                setSelectedTicket({ ...selectedTicket, status: "resolved" })
                 await fetchSupportTickets()
+                setIsResolveDialogOpen(false)
+                // Switch to resolved tab
+                setActiveTab("resolved")
+                // Go back to user tickets view
+                setViewMode("user-tickets")
+                setSelectedTicket(null)
                 toast({
-                    title: "Success",
-                    description: `Ticket status updated to ${newStatus.replace('_', ' ')}.`,
+                    title: "Ticket resolved",
+                    description: "Conversation moved to the Resolved tab.",
+                    duration: 4000,
+                    style: TICKET_TOAST_STYLE,
                 })
             } else {
-                throw new Error(data.error || data.message || "Failed to update status")
+                throw new Error(data.error || data.message || "Failed to resolve ticket")
             }
         } catch (error) {
-            console.error("Error updating status:", error)
+            console.error("🔍 [handleResolveTicket] Error:", error)
             toast({
                 title: "Error",
-                description: error.message || "Failed to update status. Please try again.",
+                description: error.message || "Failed to resolve ticket. Please try again.",
                 variant: "destructive",
             })
         }
@@ -369,7 +452,12 @@ const StaffChat = ({ userId: propUserId }) => {
     }
 
     // Handle ticket select (show conversation)
-    const handleTicketSelect = (ticket) => {
+    const handleTicketSelect = async (ticket) => {
+        console.log("🔍 [handleTicketSelect] Clicked ticket:", ticket)
+        console.log("🔍 [handleTicketSelect] Ticket ID:", ticket.id)
+        console.log("🔍 [handleTicketSelect] Ticket status:", ticket.status)
+
+        // Update state with the ticket
         setSelectedTicket(ticket)
         setViewMode("conversation")
         setMessages([])
@@ -378,7 +466,7 @@ const StaffChat = ({ userId: propUserId }) => {
             fetchTicketMessages(ticket.id)
         }
     }
-    
+
     // Get user initials from name
     const getUserInitials = (name) => {
         if (!name) return "U"
@@ -437,12 +525,12 @@ const StaffChat = ({ userId: propUserId }) => {
     // Group tickets by user
     const groupTicketsByUser = (tickets) => {
         const userMap = new Map()
-        
+
         tickets.forEach(ticket => {
             const userId = ticket.user_id
             const userName = ticket.user_name || ticket.user_email || 'Unknown User'
             const userEmail = ticket.user_email || ''
-            
+
             if (!userMap.has(userId)) {
                 userMap.set(userId, {
                     user_id: userId,
@@ -454,22 +542,22 @@ const StaffChat = ({ userId: propUserId }) => {
                     latestTicketTime: null
                 })
             }
-            
+
             const userData = userMap.get(userId)
             userData.tickets.push(ticket)
             userData.totalTicketsCount++
-            
+
             if (ticket.status === 'pending' || ticket.status === 'in_progress') {
                 userData.activeTicketsCount++
             }
-            
+
             // Track latest ticket time
             const ticketTime = new Date(ticket.last_message_at || ticket.created_at || 0)
             if (!userData.latestTicketTime || ticketTime > userData.latestTicketTime) {
                 userData.latestTicketTime = ticketTime
             }
         })
-        
+
         // Convert to array and sort by latest ticket time
         return Array.from(userMap.values()).sort((a, b) => {
             if (!a.latestTicketTime && !b.latestTicketTime) return 0
@@ -479,14 +567,20 @@ const StaffChat = ({ userId: propUserId }) => {
         })
     }
 
-    // Filter and group users
+    // Filter and group users based on active tab
     const filteredUsers = () => {
         const filtered = supportTickets.filter((ticket) => {
-            // Filter by status
-            if (statusFilter !== "all" && ticket.status !== statusFilter) {
+            // Filter by active tab (all, in_progress, or resolved)
+            if (activeTab === "pending" && ticket.status !== "pending") {
                 return false
             }
-            
+            if (activeTab === "in_progress" && ticket.status !== "in_progress") {
+                return false
+            }
+            if (activeTab === "resolved" && ticket.status !== "resolved") {
+                return false
+            }
+
             // Filter by search query
             if (searchQuery) {
                 const query = searchQuery.toLowerCase()
@@ -498,25 +592,18 @@ const StaffChat = ({ userId: propUserId }) => {
                     ticket.message?.toLowerCase().includes(query)
                 )
             }
-            
+
             return true
         })
-        
+
         return groupTicketsByUser(filtered)
     }
 
-    // Get user's tickets (filtered)
+    // Get user's tickets (filtered by active tab)
     const getUserTickets = () => {
         if (!selectedUser) return []
-        
+
         const userTickets = supportTickets.filter(ticket => ticket.user_id === selectedUser.user_id)
-        
-        // Apply status filter if not "all"
-        if (statusFilter !== "all") {
-            return userTickets.filter(ticket => ticket.status === statusFilter)
-        }
-        
-        // Sort by created_at descending
         return userTickets.sort((a, b) => {
             const dateA = new Date(a.created_at || a.last_message_at || 0)
             const dateB = new Date(b.created_at || b.last_message_at || 0)
@@ -561,21 +648,50 @@ const StaffChat = ({ userId: propUserId }) => {
         }
     }
 
-    // Format message time
-    const formatMessageTime = (timestamp) => {
-        if (!timestamp) return ""
-        try {
-            const date = new Date(timestamp)
-            if (isToday(date)) {
-                return format(date, "HH:mm")
-            } else if (isYesterday(date)) {
-                return "Yesterday " + format(date, "HH:mm")
-            } else {
-                return format(date, "MMM d, HH:mm")
-            }
-        } catch {
-            return ""
+    const parsePHDate = (timestamp) => {
+        if (!timestamp) return null
+        let normalized = typeof timestamp === "string" ? timestamp.trim() : timestamp
+        if (typeof normalized === "string" && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(normalized)) {
+            normalized = normalized.replace(" ", "T") + "+08:00"
         }
+        if (typeof normalized === "string" && !normalized.endsWith("Z") && !normalized.includes("+")) {
+            normalized = normalized + "+08:00"
+        }
+        const date = new Date(normalized)
+        return isNaN(date.getTime()) ? null : date
+    }
+
+    const formatMessageTime = (timestamp) => {
+        const date = parsePHDate(timestamp)
+        if (!date) return ""
+
+        const manilaNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Manila" }))
+        const todayStr = manilaNow.toLocaleDateString("en-US", { timeZone: "Asia/Manila" })
+        const yesterday = new Date(manilaNow)
+        yesterday.setDate(yesterday.getDate() - 1)
+        const yesterdayStr = yesterday.toLocaleDateString("en-US", { timeZone: "Asia/Manila" })
+        const messageDateStr = date.toLocaleDateString("en-US", { timeZone: "Asia/Manila" })
+
+        const timeString = date.toLocaleTimeString("en-US", {
+            timeZone: "Asia/Manila",
+            hour: "numeric",
+            minute: "2-digit",
+            hour12: true,
+        })
+
+        if (messageDateStr === todayStr) {
+            return timeString
+        }
+        if (messageDateStr === yesterdayStr) {
+            return `Yesterday ${timeString}`
+        }
+
+        const dateString = date.toLocaleDateString("en-US", {
+            timeZone: "Asia/Manila",
+            month: "short",
+            day: "numeric",
+        })
+        return `${dateString} ${timeString}`
     }
 
 
@@ -588,7 +704,7 @@ const StaffChat = ({ userId: propUserId }) => {
         }
         const color = colors[status] || "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300"
         const label = status?.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase()) || "Unknown"
-        
+
         return (
             <Badge className={color} variant="outline" style={{ fontSize: '10px', padding: '2px 6px' }}>
                 {label}
@@ -704,43 +820,42 @@ const StaffChat = ({ userId: propUserId }) => {
                         <div className="flex flex-col h-full overflow-hidden min-h-0">
                             {/* Conversation Header */}
                             <div className="p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50 flex-shrink-0">
-                                <div className="flex items-center justify-between mb-2">
-                                    <button
+                                <div className="flex items-center gap-2 mb-2">
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
                                         onClick={handleBack}
-                                        className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+                                        className="h-8 w-8 p-0 hover:bg-gray-200 rounded-lg flex-shrink-0"
                                     >
-                                        <div className="w-8 h-8 rounded-full bg-orange-100 dark:bg-orange-900 flex items-center justify-center">
-                                            <Ticket className="w-4 h-4 text-orange-600 dark:text-orange-400" />
-                                        </div>
-                                        <div className="text-left">
-                                            <p className="font-medium text-sm text-gray-900 dark:text-gray-100">
-                                                {selectedTicket?.subject}
-                                            </p>
-                                            <p className="text-xs text-gray-500 dark:text-gray-400">
-                                                {selectedTicket?.user_name || selectedTicket?.user_email || 'Unknown User'}
-                                            </p>
-                                        </div>
-                                    </button>
+                                        <ArrowLeft className="w-4 h-4 text-gray-600" />
+                                    </Button>
+                                    <div className="flex-1 min-w-0">
+                                        <p className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">
+                                            {selectedTicket?.subject}
+                                        </p>
+                                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                                            {selectedTicket?.user_name || selectedTicket?.user_email || 'Unknown User'}
+                                        </p>
+                                    </div>
                                 </div>
                                 {selectedTicket && (
-                                    <div className="flex items-center gap-2 mt-2">
-                                        <span className="text-xs text-gray-600 dark:text-gray-400">Status:</span>
-                                        <Select 
-                                            value={selectedTicket.status} 
-                                            onValueChange={handleUpdateStatus}
-                                        >
-                                            <SelectTrigger className="h-7 text-xs w-32" style={{ zIndex: 10 }}>
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent style={{ zIndex: 9999 }}>
-                                                <SelectItem value="pending">Pending</SelectItem>
-                                                <SelectItem value="in_progress">In Progress</SelectItem>
-                                                <SelectItem value="resolved">Resolved</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                        <span className="text-xs text-gray-500 dark:text-gray-400 ml-auto">
-                                            {selectedTicket.ticket_number}
-                                        </span>
+                                    <div className="flex items-center justify-between gap-2 mt-2">
+                                        <div className="flex items-center gap-2">
+                                            {getStatusBadge(selectedTicket.status)}
+                                            <span className="text-xs text-gray-500 dark:text-gray-400">
+                                                {selectedTicket.ticket_number}
+                                            </span>
+                                        </div>
+                                        {selectedTicket.status === 'in_progress' && (
+                                            <Button
+                                                onClick={() => setIsResolveDialogOpen(true)}
+                                                className="h-7 text-xs bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white shadow-md"
+                                                size="sm"
+                                            >
+                                                <CheckCircle2 className="mr-1 h-3 w-3" />
+                                                Mark as Resolved
+                                            </Button>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -761,6 +876,15 @@ const StaffChat = ({ userId: propUserId }) => {
                                     <div className="space-y-4">
                                         {messages.map((message) => {
                                             const isAdmin = isAdminMessage(message)
+                                            console.log("🔍 [Message Render] Rendering message:", {
+                                                id: message.id,
+                                                created_at: message.created_at,
+                                                timestamp: message.timestamp,
+                                                created_at_type: typeof message.created_at,
+                                                formatted: formatMessageTime(message.created_at || message.timestamp),
+                                                sender_name: message.sender_name,
+                                                isAdmin: isAdmin
+                                            })
                                             return (
                                                 <div
                                                     key={message.id}
@@ -768,10 +892,21 @@ const StaffChat = ({ userId: propUserId }) => {
                                                         "flex gap-2",
                                                         isAdmin ? "justify-end" : "justify-start"
                                                     )}
+                                                    onClick={() => {
+                                                        console.log("🔍 [Message Click] Clicked on message:", message)
+                                                        console.log("🔍 [Message Click] Message created_at raw:", message.created_at)
+                                                        console.log("🔍 [Message Click] Message timestamp raw:", message.timestamp)
+                                                        const testDate = new Date(message.created_at || message.timestamp)
+                                                        console.log("🔍 [Message Click] Parsed Date object:", testDate)
+                                                        console.log("🔍 [Message Click] UTC string:", testDate.toUTCString())
+                                                        console.log("🔍 [Message Click] ISO string:", testDate.toISOString())
+                                                        console.log("🔍 [Message Click] Local string:", testDate.toLocaleString())
+                                                        console.log("🔍 [Message Click] PH string:", testDate.toLocaleString("en-US", { timeZone: "Asia/Manila" }))
+                                                    }}
                                                 >
                                                     {!isAdmin && selectedTicket && (
                                                         <Avatar className="w-7 h-7 flex-shrink-0">
-                                                            <AvatarFallback className="bg-gray-100 text-gray-600 text-xs">
+                                                            <AvatarFallback className="bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-xs">
                                                                 {getUserInitials(selectedTicket.user_name || selectedTicket.user_email || '')}
                                                             </AvatarFallback>
                                                         </Avatar>
@@ -805,6 +940,13 @@ const StaffChat = ({ userId: propUserId }) => {
                                                                     ? "text-orange-100"
                                                                     : "text-gray-500"
                                                             )}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation()
+                                                                console.log("🔍 [Timestamp Click] Clicked timestamp for message:", message.id)
+                                                                console.log("🔍 [Timestamp Click] Raw created_at:", message.created_at)
+                                                                console.log("🔍 [Timestamp Click] Raw timestamp:", message.timestamp)
+                                                                console.log("🔍 [Timestamp Click] Formatted result:", formatMessageTime(message.created_at || message.timestamp))
+                                                            }}
                                                         >
                                                             <span>{formatMessageTime(message.created_at || message.timestamp)}</span>
                                                             {isAdmin && (
@@ -820,8 +962,8 @@ const StaffChat = ({ userId: propUserId }) => {
                                                     </div>
                                                     {isAdmin && (
                                                         <Avatar className="w-7 h-7 flex-shrink-0">
-                                                            <AvatarFallback className="bg-orange-100 text-orange-600 text-xs">
-                                                                S
+                                                            <AvatarFallback className="bg-orange-100 dark:bg-orange-900 text-orange-600 dark:text-orange-400 text-xs">
+                                                                A
                                                             </AvatarFallback>
                                                         </Avatar>
                                                     )}
@@ -833,40 +975,48 @@ const StaffChat = ({ userId: propUserId }) => {
                                 )}
                             </ScrollArea>
 
-                            {/* Message Input */}
-                            <div className="p-4 border-t border-gray-200 bg-gradient-to-br from-gray-50 to-white flex-shrink-0">
-                                <div className="flex gap-3 items-end">
-                                    <div className="flex-1">
-                                        <Input
-                                            ref={messageInputRef}
-                                            value={messageInput}
-                                            onChange={(e) => setMessageInput(e.target.value)}
-                                            onKeyPress={handleKeyPress}
-                                            placeholder="Type your message..."
-                                            className="w-full text-sm border-2 border-gray-300 focus:border-orange-500 focus:ring-2 focus:ring-orange-200 rounded-lg px-4 py-2.5 bg-white"
-                                            disabled={isSending}
-                                        />
+                            {/* Message Input - Show for all non-resolved tickets */}
+                            {selectedTicket && selectedTicket.status !== 'resolved' ? (
+                                <div className="p-4 border-t border-gray-200 bg-gradient-to-br from-gray-50 to-white flex-shrink-0">
+                                    <div className="flex gap-3 items-end">
+                                        <div className="flex-1">
+                                            <Input
+                                                ref={messageInputRef}
+                                                value={messageInput}
+                                                onChange={(e) => setMessageInput(e.target.value)}
+                                                onKeyPress={handleKeyPress}
+                                                placeholder="Type your message..."
+                                                className="w-full text-sm border-2 border-gray-300 focus:border-orange-500 focus:ring-2 focus:ring-orange-200 rounded-lg px-4 py-2.5 bg-white"
+                                                disabled={isSending}
+                                            />
+                                        </div>
+                                        <Button
+                                            onClick={sendMessage}
+                                            disabled={!messageInput.trim() || isSending || !selectedTicket}
+                                            size="default"
+                                            className="bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white shadow-lg hover:shadow-xl px-5 py-2.5 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            {isSending ? (
+                                                <>
+                                                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                                                    Sending...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <Send className="w-4 h-4 mr-2" />
+                                                    Send
+                                                </>
+                                            )}
+                                        </Button>
                                     </div>
-                                    <Button
-                                        onClick={sendMessage}
-                                        disabled={!messageInput.trim() || isSending || !selectedTicket}
-                                        size="default"
-                                        className="bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white shadow-lg hover:shadow-xl px-5 py-2.5 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        {isSending ? (
-                                            <>
-                                                <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                                                Sending...
-                                            </>
-                                        ) : (
-                                            <>
-                                                <Send className="w-4 h-4 mr-2" />
-                                                Send
-                                            </>
-                                        )}
-                                    </Button>
                                 </div>
-                            </div>
+                            ) : selectedTicket && selectedTicket.status === 'resolved' ? (
+                                <div className="p-4 border-t border-gray-200 bg-gray-50 flex-shrink-0">
+                                    <div className="text-center text-sm text-gray-500 dark:text-gray-400 py-2">
+                                        This ticket has been resolved. No further messages can be sent.
+                                    </div>
+                                </div>
+                            ) : null}
                         </div>
                     ) : viewMode === "users" ? (
                         // Users List View
@@ -882,39 +1032,41 @@ const StaffChat = ({ userId: propUserId }) => {
                                         className="pl-8 h-9 text-sm"
                                     />
                                 </div>
-                                <Select value={statusFilter} onValueChange={setStatusFilter}>
-                                    <SelectTrigger className="h-9 text-sm" style={{ zIndex: 10 }}>
-                                        <SelectValue placeholder="All Status" />
-                                    </SelectTrigger>
-                                    <SelectContent style={{ zIndex: 9999 }}>
-                                        <SelectItem value="all">All Status</SelectItem>
-                                        <SelectItem value="pending">Pending</SelectItem>
-                                        <SelectItem value="in_progress">In Progress</SelectItem>
-                                        <SelectItem value="resolved">Resolved</SelectItem>
-                                    </SelectContent>
-                                </Select>
+                                <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+                                    <TabsList className="grid w-full grid-cols-3">
+                                        <TabsTrigger value="pending">Pending</TabsTrigger>
+                                        <TabsTrigger value="in_progress">In Progress</TabsTrigger>
+                                        <TabsTrigger value="resolved">Resolved</TabsTrigger>
+                                    </TabsList>
+                                </Tabs>
                             </div>
 
                             {/* Users List */}
                             <ScrollArea className="flex-1 min-h-0">
                                 {!userId && !userIdLoadingTimeout ? (
-                                    <div className="flex flex-col items-center justify-center h-32 text-gray-500 p-4">
+                                    <div className="flex flex-col items-center justify-center h-32 text-gray-500 dark:text-gray-400 p-4">
                                         <Loader2 className="w-6 h-6 animate-spin text-orange-500 mb-2" />
                                         <p className="text-xs opacity-75">Loading...</p>
                                     </div>
                                 ) : isLoading ? (
-                                    <div className="flex flex-col items-center justify-center h-32 text-gray-500 p-4">
+                                    <div className="flex flex-col items-center justify-center h-32 text-gray-500 dark:text-gray-400 p-4">
                                         <Loader2 className="w-6 h-6 animate-spin text-orange-500 mb-2" />
                                         <p className="text-xs opacity-75">Loading...</p>
                                     </div>
                                 ) : filteredUsers().length === 0 ? (
-                                    <div className="flex flex-col items-center justify-center h-32 text-gray-500 p-4">
+                                    <div className="flex flex-col items-center justify-center h-32 text-gray-500 dark:text-gray-400 p-4">
                                         <User className="w-10 h-10 mb-3 opacity-30" />
                                         <p className="text-sm font-medium">No users found</p>
                                         <p className="text-xs mt-2 opacity-75 text-center max-w-xs">
-                                            {searchQuery || statusFilter !== "all"
-                                                ? "Try adjusting your filters"
-                                                : "Support tickets will appear here"}
+                                            {searchQuery
+                                                ? "Try adjusting your search"
+                                                : activeTab === "pending"
+                                                    ? "No pending tickets"
+                                                    : activeTab === "in_progress"
+                                                        ? "No in-progress tickets"
+                                                        : activeTab === "resolved"
+                                                            ? "No resolved tickets"
+                                                            : "Support tickets will appear here"}
                                         </p>
                                     </div>
                                 ) : (
@@ -926,7 +1078,7 @@ const StaffChat = ({ userId: propUserId }) => {
                                                 className={cn(
                                                     "w-full p-3 border-2 border-gray-200 rounded-xl hover:border-orange-300 hover:shadow-md",
                                                     "transition-all text-left flex items-start gap-3 bg-white group",
-                                                    user.activeTicketsCount > 0 && "bg-orange-50/50"
+                                                    user.activeTicketsCount > 0 && activeTab === "in_progress" && "bg-orange-50/50"
                                                 )}
                                             >
                                                 <div className="p-2 rounded-lg bg-gradient-to-br from-orange-100 to-orange-200 group-hover:from-orange-200 group-hover:to-orange-300 transition-colors flex-shrink-0">
@@ -937,7 +1089,7 @@ const StaffChat = ({ userId: propUserId }) => {
                                                         <p className="font-semibold text-sm text-gray-900 truncate">
                                                             {user.user_name}
                                                         </p>
-                                                        {user.activeTicketsCount > 0 && (
+                                                        {user.activeTicketsCount > 0 && activeTab === "in_progress" && (
                                                             <Badge className="bg-orange-500 text-white hover:bg-orange-600 text-xs px-1.5 py-0.5 flex-shrink-0">
                                                                 {user.activeTicketsCount} active
                                                             </Badge>
@@ -968,35 +1120,23 @@ const StaffChat = ({ userId: propUserId }) => {
                         <div className="flex flex-col h-full">
                             {/* User Info Header */}
                             <div className="p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50">
-                                <button
-                                    onClick={handleBack}
-                                    className="flex items-center gap-2 mb-2 hover:opacity-80 transition-opacity"
-                                >
-                                    <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center">
-                                        <User className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                                    </div>
-                                    <div className="text-left">
-                                        <p className="font-medium text-sm text-gray-900 dark:text-gray-100">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={handleBack}
+                                        className="h-8 w-8 p-0 hover:bg-gray-200 rounded-lg flex-shrink-0"
+                                    >
+                                        <ArrowLeft className="w-4 h-4 text-gray-600" />
+                                    </Button>
+                                    <div className="flex-1 min-w-0">
+                                        <p className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">
                                             {selectedUser?.user_name || 'Unknown User'}
                                         </p>
-                                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
                                             {selectedUser?.user_email}
                                         </p>
                                     </div>
-                                </button>
-                                <div className="flex items-center gap-2">
-                                    <span className="text-xs text-gray-600 dark:text-gray-400">Status:</span>
-                                    <Select value={statusFilter} onValueChange={setStatusFilter}>
-                                        <SelectTrigger className="h-7 text-xs w-32" style={{ zIndex: 10 }}>
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent style={{ zIndex: 9999 }}>
-                                            <SelectItem value="all">All Status</SelectItem>
-                                            <SelectItem value="pending">Pending</SelectItem>
-                                            <SelectItem value="in_progress">In Progress</SelectItem>
-                                            <SelectItem value="resolved">Resolved</SelectItem>
-                                        </SelectContent>
-                                    </Select>
                                 </div>
                             </div>
 
@@ -1058,11 +1198,41 @@ const StaffChat = ({ userId: propUserId }) => {
                     ) : null}
                 </div>
             )}
+
+            {/* Resolve Confirmation Dialog */}
+            <AlertDialog open={isResolveDialogOpen} onOpenChange={setIsResolveDialogOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle className="flex items-center gap-2">
+                            <CheckCircle2 className="h-5 w-5 text-green-600" />
+                            Mark Ticket as Resolved
+                        </AlertDialogTitle>
+                        <AlertDialogDescription className="pt-2 space-y-2">
+                            <p>
+                                Are you sure you want to mark ticket <span className="font-semibold">#{selectedTicket?.ticket_number}</span> as resolved?
+                            </p>
+                            <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 mt-3">
+                                <p className="text-sm text-orange-900 font-semibold mb-1">Warning:</p>
+                                <p className="text-sm text-orange-800">
+                                    Once resolved, this ticket will be moved to the "Resolved" tab and no further messages can be sent. This action cannot be undone.
+                                </p>
+                            </div>
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={handleResolveTicket}
+                            className="bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700"
+                        >
+                            <CheckCircle2 className="mr-2 h-4 w-4" />
+                            Mark as Resolved
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </>
     )
 }
 
-export default StaffChat
-
-
-
+export default AdminChat

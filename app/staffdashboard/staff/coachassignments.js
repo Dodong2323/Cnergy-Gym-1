@@ -29,6 +29,7 @@ import {
   UserPlus,
 } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { useToast } from "@/components/ui/use-toast"
 
 const API_BASE_URL = "https://api.cnergy.site/admin_coach.php"
 const COACH_API_URL = "https://api.cnergy.site/addcoach.php"
@@ -43,17 +44,17 @@ const CoachAssignments = ({ userId }) => {
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(false)
   const [error, setError] = useState(null)
-  
+
   // Enhanced filters
   const [selectedCoachFilter, setSelectedCoachFilter] = useState("all")
   const [statusFilter, setStatusFilter] = useState("active") // Changed default to 'active'
   const [rateTypeFilter, setRateTypeFilter] = useState("all")
   const [dateFilter, setDateFilter] = useState("all")
   const [coachMembersRateFilter, setCoachMembersRateFilter] = useState("all")
-  
+
   // Pagination
   const [currentPage, setCurrentPage] = useState(1)
-  
+
   const [availableCoaches, setAvailableCoaches] = useState([])
   const [selectedCoachId, setSelectedCoachId] = useState("")
   const [selectedCoach, setSelectedCoach] = useState(null)
@@ -63,8 +64,7 @@ const CoachAssignments = ({ userId }) => {
   const [amountReceived, setAmountReceived] = useState("")
   const [referenceNumber, setReferenceNumber] = useState("")
 
-  // Use userId prop directly instead of fetching from API
-  const currentUserId = userId || null
+  const [currentUserId, setCurrentUserId] = useState(6)
 
   // Data states
   const [assignedMembers, setAssignedMembers] = useState([])
@@ -73,6 +73,7 @@ const CoachAssignments = ({ userId }) => {
     total_coaches: 0,
     total_members: 0,
   })
+  const { toast } = useToast()
 
   const fetchAssignedMembers = async (status = 'active') => {
     try {
@@ -135,11 +136,13 @@ const CoachAssignments = ({ userId }) => {
     setActionLoading(true)
     setError(null)
     try {
+      const effectiveUserId = currentUserId || userId
+
       const assignResponse = await axios.post(`${API_BASE_URL}?action=assign-coach`, {
         member_id: memberId,
         coach_id: selectedCoachId,
-        admin_id: currentUserId,
-        staff_id: currentUserId,
+        admin_id: effectiveUserId,
+        staff_id: effectiveUserId,
         rate_type: rateType,
       })
 
@@ -150,32 +153,38 @@ const CoachAssignments = ({ userId }) => {
       if (paymentAmount > 0) {
         const paymentData = {
           request_id: assignResponse.data.data?.assignment_id,
-          admin_id: currentUserId,
-          staff_id: currentUserId,
+          admin_id: effectiveUserId,
+          staff_id: effectiveUserId,
           payment_method: paymentMethod,
           amount_received: paymentMethod === "cash" ? parseFloat(amountReceived) : paymentAmount,
-          cashier_id: currentUserId,
+          cashier_id: effectiveUserId,
           receipt_number: paymentMethod === "gcash" && referenceNumber ? referenceNumber : undefined,
         }
 
         const paymentResponse = await axios.post(`${API_BASE_URL}?action=approve-request-with-payment`, paymentData)
-        
+
         if (!paymentResponse.data.success) {
           throw new Error(paymentResponse.data.message || "Coach assigned but payment processing failed")
         }
       }
 
-      await Promise.all([fetchAssignedMembers(), fetchDashboardStats(), fetchActivityLog(), fetchAvailableMembers()])
+      const memberName = selectedMember?.fullName || selectedMember?.name || `member #${memberId}`
+      const coachName = selectedCoach?.name || `Coach #${selectedCoachId}`
+      await Promise.all([fetchAssignedMembers(), fetchDashboardStats(), fetchAvailableMembers()])
       setAssignModalOpen(false)
       setSelectedMember(null)
       setSelectedMemberId("")
       setSelectedCoachId("")
       setSelectedCoach(null)
-      setRateType("")
+      setRateType("monthly")
       setPaymentMethod("cash")
       setAmountReceived("")
       setReferenceNumber("")
       setCurrentPage(1)
+      toast({
+        title: "Coach assignment confirmed",
+        description: `${coachName} is now coaching ${memberName}.`,
+      })
     } catch (err) {
       console.error("Error assigning coach:", err)
       setError("Failed to assign coach: " + (err.response?.data?.message || err.message))
@@ -183,7 +192,6 @@ const CoachAssignments = ({ userId }) => {
       setActionLoading(false)
     }
   }
-
 
   const fetchAvailableCoaches = async () => {
     try {
@@ -239,25 +247,73 @@ const CoachAssignments = ({ userId }) => {
       setLoading(false)
     }
   }
-  
+
   // Update assigned members when status filter changes
   useEffect(() => {
     if (!loading) {
       fetchAssignedMembers(statusFilter)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter])
 
   useEffect(() => {
+    const getCurrentUser = async () => {
+      const storedUserId = sessionStorage.getItem("user_id")
+      if (storedUserId) {
+        setCurrentUserId(parseInt(storedUserId))
+        return
+      }
+
+      try {
+        const response = await axios.get('https://api.cnergy.site/session.php', {
+          withCredentials: true
+        })
+        if (response.data && response.data.authenticated && response.data.user_id) {
+          setCurrentUserId(response.data.user_id)
+          sessionStorage.setItem("user_id", response.data.user_id)
+          return
+        }
+      } catch (err) {
+        if (err.response && err.response.status === 401) {
+          if (err.response.data && err.response.data.authenticated && err.response.data.user_id) {
+            setCurrentUserId(err.response.data.user_id)
+            sessionStorage.setItem("user_id", err.response.data.user_id)
+            return
+          }
+        }
+        if (!err.response || err.response.status !== 401) {
+          console.error("Error getting current user from session:", err)
+        }
+      }
+
+      try {
+        const response = await axios.get(`${API_BASE_URL}?action=get-current-user`)
+        if (response.data && response.data.success && response.data.user_id) {
+          setCurrentUserId(response.data.user_id)
+          sessionStorage.setItem("user_id", response.data.user_id)
+        }
+      } catch (err) {
+        if (!err.response || err.response.status !== 401) {
+          console.error("Error getting current user from API:", err)
+        }
+      }
+    }
+    getCurrentUser()
+  }, [])
+
+  useEffect(() => {
     loadAllData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     const interval = setInterval(() => {
-      fetchAssignedMembers()
+      fetchAssignedMembers(statusFilter)
       fetchDashboardStats()
       fetchAvailableMembers()
     }, 30000)
     return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const openAssignModal = (member = null) => {
@@ -269,6 +325,11 @@ const CoachAssignments = ({ userId }) => {
       setSelectedMemberId("")
     }
     setSelectedCoachId("")
+    setSelectedCoach(null)
+    setRateType("")
+    setPaymentMethod("cash")
+    setAmountReceived("")
+    setReferenceNumber("")
     setAssignModalOpen(true)
   }
 
@@ -277,7 +338,7 @@ const CoachAssignments = ({ userId }) => {
     setSelectedMemberId("")
     setSelectedCoachId("")
     setSelectedCoach(null)
-    setRateType("monthly")
+    setRateType("")
     setPaymentMethod("cash")
     setAmountReceived("")
     setReferenceNumber("")
@@ -288,7 +349,7 @@ const CoachAssignments = ({ userId }) => {
     setSelectedCoachId(coachId)
     const coach = availableCoaches.find(c => c.id.toString() === coachId.toString())
     setSelectedCoach(coach || null)
-    setRateType("monthly")
+    setRateType("")
     setAmountReceived("")
   }
 
@@ -313,21 +374,6 @@ const CoachAssignments = ({ userId }) => {
     return Math.max(0, received - amount)
   }
 
-  const formatDate = (dateString) => {
-    if (!dateString) return "N/A"
-    const date = new Date(dateString)
-    if (isNaN(date.getTime())) return "N/A"
-    return date.toLocaleString("en-US", {
-      timeZone: "Asia/Manila",
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
-    })
-  }
-
   const formatDateShort = (dateString) => {
     if (!dateString) return "N/A"
     const date = new Date(dateString)
@@ -339,7 +385,6 @@ const CoachAssignments = ({ userId }) => {
       year: "numeric",
     })
   }
-
 
   const getInitials = (name) => {
     if (!name) return "??"
@@ -374,11 +419,12 @@ const CoachAssignments = ({ userId }) => {
         return false
       }
 
-      // Status filter
+      // Status filter - backend already handles this, but keep for client-side filtering if needed
       if (statusFilter !== "all") {
-        const status = assignment.status?.toLowerCase() || "active"
-        if (statusFilter === "active" && status !== "active") return false
-        if (statusFilter === "expired" && (assignment.expiresAt && new Date(assignment.expiresAt) >= new Date())) return false
+        const isExpired = assignment.status === 'expired' ||
+          (assignment.expiresAt && new Date(assignment.expiresAt) < new Date())
+        if (statusFilter === "active" && isExpired) return false
+        if (statusFilter === "expired" && !isExpired) return false
       }
 
       // Rate type filter
@@ -409,7 +455,7 @@ const CoachAssignments = ({ userId }) => {
   const coachMembers = useMemo(() => {
     if (selectedCoachFilter === "all") return []
     let members = filteredMembers.filter(assignment => assignment.coach?.id?.toString() === selectedCoachFilter)
-    
+
     // Apply subscription/rate type filter for coach members
     if (coachMembersRateFilter !== "all") {
       members = members.filter(assignment => {
@@ -417,7 +463,7 @@ const CoachAssignments = ({ userId }) => {
         return assignmentRateType.toLowerCase() === coachMembersRateFilter.toLowerCase()
       })
     }
-    
+
     return members
   }, [filteredMembers, selectedCoachFilter, coachMembersRateFilter])
 
@@ -525,17 +571,17 @@ const CoachAssignments = ({ userId }) => {
                   <CardDescription className="mt-1">Select a coach to view their assigned members</CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={loadAllData} 
-                    disabled={loading} 
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={loadAllData}
+                    disabled={loading}
                     className="shadow-sm h-9 w-9 p-0"
                     title="Refresh"
                   >
                     <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                   </Button>
-                  <Button 
+                  <Button
                     onClick={openManualConnectionModal}
                     className="bg-slate-900 hover:bg-slate-800 text-white shadow-sm"
                     size="sm"
@@ -583,28 +629,24 @@ const CoachAssignments = ({ userId }) => {
                       <div
                         key={coach.id}
                         onClick={() => setSelectedCoachFilter(coach.id.toString())}
-                        className={`border rounded-lg p-4 cursor-pointer transition-all ${
-                          isSelected
-                            ? 'border-blue-500 bg-blue-50/50 shadow-md'
-                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50/50 hover:shadow-sm'
-                        }`}
+                        className={`border rounded-lg p-4 cursor-pointer transition-all ${isSelected
+                          ? 'border-blue-500 bg-blue-50/50 shadow-md'
+                          : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50/50 hover:shadow-sm'
+                          }`}
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-4 flex-1">
-                            <div className={`h-12 w-12 rounded-full flex items-center justify-center ${
-                              isSelected
-                                ? 'bg-blue-100'
-                                : 'bg-gray-100'
-                            }`}>
-                              <User className={`h-6 w-6 ${
-                                isSelected ? 'text-blue-700' : 'text-gray-700'
-                              }`} />
+                            <div className={`h-12 w-12 rounded-full flex items-center justify-center ${isSelected
+                              ? 'bg-blue-100'
+                              : 'bg-gray-100'
+                              }`}>
+                              <User className={`h-6 w-6 ${isSelected ? 'text-blue-700' : 'text-gray-700'
+                                }`} />
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2">
-                                <h3 className={`font-semibold text-base ${
-                                  isSelected ? 'text-blue-900' : 'text-foreground'
-                                }`}>
+                                <h3 className={`font-semibold text-base ${isSelected ? 'text-blue-900' : 'text-foreground'
+                                  }`}>
                                   {coach.name}
                                 </h3>
                                 {coach.is_available ? (
@@ -644,19 +686,19 @@ const CoachAssignments = ({ userId }) => {
                       </div>
                     )
                   })}
-                
+
                 {availableCoaches.filter(coach => {
                   if (!searchQuery) return true
                   return coach.name.toLowerCase().includes(searchQuery.toLowerCase())
                 }).length === 0 && (
-                  <div className="text-center py-12">
-                    <Users className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />
-                    <p className="text-muted-foreground font-medium">No coaches found</p>
-                    {searchQuery && (
-                      <p className="text-sm text-muted-foreground mt-1">Try a different search term</p>
-                    )}
-                  </div>
-                )}
+                    <div className="text-center py-12">
+                      <Users className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />
+                      <p className="text-muted-foreground font-medium">No coaches found</p>
+                      {searchQuery && (
+                        <p className="text-sm text-muted-foreground mt-1">Try a different search term</p>
+                      )}
+                    </div>
+                  )}
               </div>
             </CardContent>
           </Card>
@@ -673,7 +715,7 @@ const CoachAssignments = ({ userId }) => {
                     {selectedCoachFilter !== "all" ? `${selectedCoachName}'s Members` : "Select a Coach"}
                   </CardTitle>
                   <CardDescription className="mt-1">
-                    {selectedCoachFilter !== "all" 
+                    {selectedCoachFilter !== "all"
                       ? `Members assigned to this coach (${coachMembers.length})`
                       : "Filter by coach to see members"}
                   </CardDescription>
@@ -685,31 +727,28 @@ const CoachAssignments = ({ userId }) => {
                   <div className="flex gap-2 border-b">
                     <button
                       onClick={() => setStatusFilter("active")}
-                      className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                        statusFilter === "active"
-                          ? "border-emerald-500 text-emerald-600"
-                          : "border-transparent text-muted-foreground hover:text-foreground"
-                      }`}
+                      className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${statusFilter === "active"
+                        ? "border-emerald-500 text-emerald-600"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                        }`}
                     >
                       Active
                     </button>
                     <button
                       onClick={() => setStatusFilter("expired")}
-                      className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                        statusFilter === "expired"
-                          ? "border-gray-500 text-gray-600"
-                          : "border-transparent text-muted-foreground hover:text-foreground"
-                      }`}
+                      className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${statusFilter === "expired"
+                        ? "border-gray-500 text-gray-600"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                        }`}
                     >
                       Expired
                     </button>
                     <button
                       onClick={() => setStatusFilter("all")}
-                      className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                        statusFilter === "all"
-                          ? "border-blue-500 text-blue-600"
-                          : "border-transparent text-muted-foreground hover:text-foreground"
-                      }`}
+                      className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${statusFilter === "all"
+                        ? "border-blue-500 text-blue-600"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                        }`}
                     >
                       All
                     </button>
@@ -740,14 +779,14 @@ const CoachAssignments = ({ userId }) => {
                   <div className="flex flex-col items-center justify-center h-full text-center py-12">
                     <User className="h-12 w-12 text-muted-foreground/30 mb-3" />
                     <p className="text-sm text-muted-foreground font-medium">
-                      {coachMembersRateFilter !== "all" 
+                      {coachMembersRateFilter !== "all"
                         ? "No members found with this subscription type"
                         : "No members assigned to this coach yet"}
                     </p>
                     {coachMembersRateFilter !== "all" && (
-                      <Button 
-                        variant="link" 
-                        size="sm" 
+                      <Button
+                        variant="link"
+                        size="sm"
                         onClick={() => setCoachMembersRateFilter("all")}
                         className="text-xs mt-2"
                       >
@@ -757,74 +796,67 @@ const CoachAssignments = ({ userId }) => {
                   </div>
                 ) : (
                   coachMembers.map((assignment) => {
-                    const isExpired = assignment.status === 'expired' || 
+                    const isExpired = assignment.status === 'expired' ||
                       (assignment.expiresAt && new Date(assignment.expiresAt) < new Date())
                     return (
-                    <div 
-                      key={assignment.id} 
-                      className={`border rounded-lg p-3 transition-colors ${
-                        isExpired 
-                          ? 'bg-gray-50/50 opacity-75 border-gray-200 hover:bg-gray-100/50' 
+                      <div
+                        key={assignment.id}
+                        className={`border rounded-lg p-3 transition-colors ${isExpired
+                          ? 'bg-gray-50/50 opacity-75 border-gray-200 hover:bg-gray-100/50'
                           : 'hover:bg-gray-50/50'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <Avatar className={`h-10 w-10 border-2 ${
-                          isExpired ? 'border-gray-200' : 'border-gray-100'
-                        }`}>
-                          <AvatarImage src="/placeholder.svg?height=40&width=40" />
-                          <AvatarFallback className={`font-semibold text-xs ${
-                            isExpired 
-                              ? 'bg-gradient-to-br from-gray-200 to-gray-300 text-gray-500' 
-                              : 'bg-gradient-to-br from-gray-100 to-gray-200 text-gray-700'
-                          }`}>
-                            {getInitials(assignment.member?.name)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className="flex-1 min-w-0">
-                          <div className={`font-medium text-sm truncate ${
-                            isExpired ? 'text-gray-500' : 'text-foreground'
-                          }`}>
-                            {assignment.member?.name || "Unknown"}
-                          </div>
-                          <div className={`text-xs truncate ${
-                            isExpired ? 'text-gray-400' : 'text-muted-foreground'
-                          }`}>
-                            {assignment.member?.email}
-                          </div>
-                          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                            <Badge 
-                              variant="default" 
-                              className={`text-xs ${
-                                isExpired
-                                  ? 'bg-gray-300 text-gray-700 border-gray-400'
-                                  : assignment.status === 'active' 
-                                    ? 'bg-emerald-100 text-emerald-800' 
-                                    : 'bg-gray-100 text-gray-800'
-                              }`}
-                            >
-                              {isExpired ? 'Expired' : (assignment.status || "active")}
-                            </Badge>
-                            {assignment.rateType && (
-                              <Badge 
-                                variant="outline" 
-                                className="text-xs bg-blue-50 text-blue-700 border-blue-200"
-                              >
-                                <Package className="h-3 w-3 mr-1" />
-                                {assignment.rateType === 'monthly' ? 'Monthly' : 
-                                 assignment.rateType === 'per_session' ? 'Session' : 
-                                 assignment.rateType}
-                              </Badge>
-                            )}
-                            <span className={`text-xs ${
-                              isExpired ? 'text-gray-400' : 'text-muted-foreground'
+                          }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <Avatar className={`h-10 w-10 border-2 ${isExpired ? 'border-gray-200' : 'border-gray-100'
                             }`}>
-                              {assignment.expiresAt ? `Exp: ${formatDateShort(assignment.expiresAt)}` : formatDateShort(assignment.assignedAt)}
-                            </span>
+                            <AvatarImage src="/placeholder.svg?height=40&width=40" />
+                            <AvatarFallback className={`font-semibold text-xs ${isExpired
+                              ? 'bg-gradient-to-br from-gray-200 to-gray-300 text-gray-500'
+                              : 'bg-gradient-to-br from-gray-100 to-gray-200 text-gray-700'
+                              }`}>
+                              {getInitials(assignment.member?.name)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1 min-w-0">
+                            <div className={`font-medium text-sm truncate ${isExpired ? 'text-gray-500' : 'text-foreground'
+                              }`}>
+                              {assignment.member?.name || "Unknown"}
+                            </div>
+                            <div className={`text-xs truncate ${isExpired ? 'text-gray-400' : 'text-muted-foreground'
+                              }`}>
+                              {assignment.member?.email}
+                            </div>
+                            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                              <Badge
+                                variant="default"
+                                className={`text-xs ${isExpired
+                                  ? 'bg-gray-300 text-gray-700 border-gray-400'
+                                  : assignment.status === 'active'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-gray-100 text-gray-800'
+                                  }`}
+                              >
+                                {isExpired ? 'Expired' : (assignment.status || "active")}
+                              </Badge>
+                              {assignment.rateType && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-xs bg-blue-50 text-blue-700 border-blue-200"
+                                >
+                                  <Package className="h-3 w-3 mr-1" />
+                                  {assignment.rateType === 'monthly' ? 'Monthly' :
+                                    assignment.rateType === 'per_session' ? 'Session' :
+                                      assignment.rateType}
+                                </Badge>
+                              )}
+                              <span className={`text-xs ${isExpired ? 'text-gray-400' : 'text-muted-foreground'
+                                }`}>
+                                {assignment.expiresAt ? `Exp: ${formatDateShort(assignment.expiresAt)}` : formatDateShort(assignment.assignedAt)}
+                              </span>
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
                     )
                   })
                 )}
@@ -931,11 +963,10 @@ const CoachAssignments = ({ userId }) => {
                 </SelectContent>
               </Select>
               {selectedCoach && (
-                <div className={`flex items-center gap-2 text-sm p-2 rounded-md ${
-                  selectedCoach.is_available 
-                    ? 'bg-emerald-50 text-emerald-700' 
-                    : 'bg-red-50 text-red-700'
-                }`}>
+                <div className={`flex items-center gap-2 text-sm p-2 rounded-md ${selectedCoach.is_available
+                  ? 'bg-emerald-50 text-emerald-700'
+                  : 'bg-red-50 text-red-700'
+                  }`}>
                   {selectedCoach.is_available ? (
                     <>
                       <CheckCircle2 className="h-4 w-4" />
@@ -958,7 +989,7 @@ const CoachAssignments = ({ userId }) => {
                   <Package className="h-4 w-4" />
                   Select Package Type
                 </label>
-                <Select value={rateType} onValueChange={(value) => { 
+                <Select value={rateType} onValueChange={(value) => {
                   setRateType(value)
                   setAmountReceived("")
                   setReferenceNumber("")
@@ -1000,7 +1031,7 @@ const CoachAssignments = ({ userId }) => {
             {selectedCoach && rateType && (
               <div className="border-t border-gray-200 pt-6 space-y-5">
                 <h4 className="text-base font-semibold text-foreground">Payment Details</h4>
-                
+
                 {/* Amount Due Display */}
                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
                   <div className="flex justify-between items-center">
@@ -1012,7 +1043,7 @@ const CoachAssignments = ({ userId }) => {
                 {/* Payment Method */}
                 <div className="space-y-2">
                   <label className="text-sm font-semibold text-foreground">Payment Method</label>
-                  <Select value={paymentMethod} onValueChange={(value) => { 
+                  <Select value={paymentMethod} onValueChange={(value) => {
                     setPaymentMethod(value)
                     setAmountReceived("")
                     setReferenceNumber("")
@@ -1083,8 +1114,8 @@ const CoachAssignments = ({ userId }) => {
             )}
           </div>
           <DialogFooter className="pt-6 border-t mt-6">
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               onClick={() => setAssignModalOpen(false)}
               className="h-11 px-6"
             >
@@ -1094,8 +1125,8 @@ const CoachAssignments = ({ userId }) => {
               onClick={handleAssignCoach}
               className="bg-slate-900 hover:bg-slate-800 text-white h-11 px-6 shadow-md"
               disabled={
-                actionLoading || 
-                !selectedCoachId || 
+                actionLoading ||
+                !selectedCoachId ||
                 (!selectedMemberId && !selectedMember?.id) ||
                 !rateType ||
                 (paymentMethod === "cash" && (!amountReceived || parseFloat(amountReceived) < calculatePaymentAmount())) ||

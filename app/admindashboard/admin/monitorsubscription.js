@@ -79,8 +79,8 @@ const SubscriptionMonitor = ({ userId }) => {
   const [statusFilter, setStatusFilter] = useState("all")
   const [planFilter, setPlanFilter] = useState("all")
   const [subscriptionTypeFilter, setSubscriptionTypeFilter] = useState("all") // all, regular, guest
-  const [monthFilter, setMonthFilter] = useState("all")
-  const [yearFilter, setYearFilter] = useState("this_year")
+  const [startDate, setStartDate] = useState("")
+  const [endDate, setEndDate] = useState("")
   const [subscriptions, setSubscriptions] = useState([])
   const [pendingSubscriptions, setPendingSubscriptions] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1586,88 +1586,34 @@ const SubscriptionMonitor = ({ userId }) => {
     return { type: 'days', days: diffDays }
   }
 
-  // Helper function to check if subscription matches month/year filter
-  const matchesMonthYearFilter = (subscription) => {
+  // Helper function to check if subscription matches date range filter
+  const matchesDateRangeFilter = (subscription) => {
     if (!subscription.start_date) return true
     
+    // If no date filters are set, show all subscriptions
+    if (!startDate && !endDate) return true
+    
     const subscriptionDate = new Date(subscription.start_date)
-    const today = new Date()
-    const currentMonth = today.getMonth()
-    const currentYear = today.getFullYear()
-
-    // Month filter logic
-    if (monthFilter !== "all") {
-      if (monthFilter === "this_month") {
-        if (subscriptionDate.getMonth() !== currentMonth || subscriptionDate.getFullYear() !== currentYear) {
-          return false
-        }
-      } else if (monthFilter === "last_3_months") {
-        const threeMonthsAgo = new Date(today)
-        threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3)
-        if (subscriptionDate < threeMonthsAgo || subscriptionDate > today) {
-          return false
-        }
-      } else {
-        // Specific month (1-12)
-        const monthNum = parseInt(monthFilter)
-        if (!isNaN(monthNum) && monthNum >= 1 && monthNum <= 12) {
-          if (yearFilter !== "all") {
-            let targetYear = currentYear
-            if (yearFilter === "this_year") {
-              targetYear = currentYear
-            } else if (yearFilter === "last_year") {
-              targetYear = currentYear - 1
-            } else if (yearFilter === "last_last_year") {
-              targetYear = currentYear - 2
-            } else {
-              targetYear = parseInt(yearFilter)
-            }
-            if (subscriptionDate.getMonth() !== monthNum - 1 || subscriptionDate.getFullYear() !== targetYear) {
-              return false
-            }
-          } else {
-            if (subscriptionDate.getMonth() !== monthNum - 1) {
-              return false
-            }
-          }
-        }
-      }
+    subscriptionDate.setHours(0, 0, 0, 0) // Normalize to start of day
+    
+    let matchesStart = true
+    let matchesEnd = true
+    
+    // Check start date filter
+    if (startDate) {
+      const filterStartDate = new Date(startDate)
+      filterStartDate.setHours(0, 0, 0, 0)
+      matchesStart = subscriptionDate >= filterStartDate
     }
-
-    // Year filter logic
-    if (yearFilter !== "all") {
-      if (yearFilter === "this_year") {
-        // For "this_year", show subscriptions that:
-        // 1. Start in current year, OR
-        // 2. Are active (end_date is today or future), OR
-        // 3. Start in future year but are relevant to current year
-        const subscriptionYear = subscriptionDate.getFullYear()
-        const isCurrentYear = subscriptionYear === currentYear
-        const today = new Date()
-        // Include if subscription is active (end_date is today or future)
-        const isActive = subscription.end_date && new Date(subscription.end_date) >= today
-        // Include if subscription starts in current year or future (upcoming subscriptions)
-        const isRelevant = subscriptionYear >= currentYear
-        if (!isCurrentYear && !isActive && !isRelevant) {
-          return false
-        }
-      } else if (yearFilter === "last_year") {
-        if (subscriptionDate.getFullYear() !== currentYear - 1) {
-          return false
-        }
-      } else if (yearFilter === "last_last_year") {
-        if (subscriptionDate.getFullYear() !== currentYear - 2) {
-          return false
-        }
-      } else {
-        const yearNum = parseInt(yearFilter)
-        if (!isNaN(yearNum) && subscriptionDate.getFullYear() !== yearNum) {
-          return false
-        }
-      }
+    
+    // Check end date filter
+    if (endDate) {
+      const filterEndDate = new Date(endDate)
+      filterEndDate.setHours(0, 0, 0, 0)
+      matchesEnd = subscriptionDate <= filterEndDate
     }
-
-    return true
+    
+    return matchesStart && matchesEnd
   }
 
   // Group subscriptions by user_id
@@ -1806,8 +1752,8 @@ const SubscriptionMonitor = ({ userId }) => {
       }
       if (!matchesType) return false
 
-      // Apply month/year filter
-      if (!matchesMonthYearFilter(s)) return false
+      // Apply date range filter
+      if (!matchesDateRangeFilter(s)) return false
 
       // Check if subscription is expired (end_date is in the past)
       const endDate = new Date(s.end_date)
@@ -1840,8 +1786,8 @@ const SubscriptionMonitor = ({ userId }) => {
       }
       if (!matchesType) return false
 
-      // Apply month/year filter
-      if (!matchesMonthYearFilter(s)) return false
+      // Apply date range filter
+      if (!matchesDateRangeFilter(s)) return false
 
       const endDate = new Date(s.end_date)
       // Check if subscription is already expired (end_date is in the past)
@@ -1872,8 +1818,8 @@ const SubscriptionMonitor = ({ userId }) => {
       }
       if (!matchesType) return false
 
-      // Apply month/year filter
-      if (!matchesMonthYearFilter(s)) return false
+      // Apply date range filter
+      if (!matchesDateRangeFilter(s)) return false
 
       const endDate = new Date(s.end_date)
       endDate.setHours(0, 0, 0, 0)
@@ -1896,8 +1842,8 @@ const SubscriptionMonitor = ({ userId }) => {
       }
       if (!matchesType) return false
 
-      // Apply month/year filter
-      if (!matchesMonthYearFilter(s)) return false
+      // Apply date range filter
+      if (!matchesDateRangeFilter(s)) return false
 
       // Check if subscription is cancelled
       return s.status_name?.toLowerCase() === "cancelled" || 
@@ -1934,81 +1880,33 @@ const SubscriptionMonitor = ({ userId }) => {
         matchesType = true // "all" - show both
       }
 
-      // Month filter logic
-      let matchesMonth = true
-      if (monthFilter !== "all" && subscription.start_date) {
+      // Date range filter logic
+      let matchesDateRange = true
+      if (subscription.start_date) {
         const subscriptionDate = new Date(subscription.start_date)
-        const today = new Date()
-        const currentMonth = today.getMonth()
-        const currentYear = today.getFullYear()
-
-        if (monthFilter === "this_month") {
-          matchesMonth = subscriptionDate.getMonth() === currentMonth &&
-            subscriptionDate.getFullYear() === currentYear
-        } else if (monthFilter === "last_3_months") {
-          const threeMonthsAgo = new Date(today)
-          threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3)
-          matchesMonth = subscriptionDate >= threeMonthsAgo && subscriptionDate <= today
-        } else {
-          // Specific month (1-12)
-          const monthNum = parseInt(monthFilter)
-          if (!isNaN(monthNum) && monthNum >= 1 && monthNum <= 12) {
-            // If year filter is set, use that year, otherwise check all years
-            if (yearFilter !== "all") {
-              let targetYear = currentYear
-              if (yearFilter === "this_year") {
-                targetYear = currentYear
-              } else if (yearFilter === "last_year") {
-                targetYear = currentYear - 1
-              } else if (yearFilter === "last_last_year") {
-                targetYear = currentYear - 2
-              } else {
-                targetYear = parseInt(yearFilter)
-              }
-              matchesMonth = subscriptionDate.getMonth() === monthNum - 1 &&
-                subscriptionDate.getFullYear() === targetYear
-            } else {
-              // Just match the month in any year
-              matchesMonth = subscriptionDate.getMonth() === monthNum - 1
-            }
-          }
+        subscriptionDate.setHours(0, 0, 0, 0) // Normalize to start of day
+        
+        let matchesStart = true
+        let matchesEnd = true
+        
+        // Check start date filter
+        if (startDate) {
+          const filterStartDate = new Date(startDate)
+          filterStartDate.setHours(0, 0, 0, 0)
+          matchesStart = subscriptionDate >= filterStartDate
         }
+        
+        // Check end date filter
+        if (endDate) {
+          const filterEndDate = new Date(endDate)
+          filterEndDate.setHours(0, 0, 0, 0)
+          matchesEnd = subscriptionDate <= filterEndDate
+        }
+        
+        matchesDateRange = matchesStart && matchesEnd
       }
 
-      // Year filter logic
-      let matchesYear = true
-      if (yearFilter !== "all" && subscription.start_date) {
-        const subscriptionDate = new Date(subscription.start_date)
-        const today = new Date()
-        const currentYear = today.getFullYear()
-
-        if (yearFilter === "this_year") {
-          // For "this_year", show subscriptions that:
-          // 1. Start in current year, OR
-          // 2. Are active (end_date is in current year or future), OR
-          // 3. Start in future year but are relevant to current year
-          const subscriptionYear = subscriptionDate.getFullYear()
-          const isCurrentYear = subscriptionYear === currentYear
-          const today = new Date()
-          // Include if subscription is active (end_date is today or future)
-          const isActive = subscription.end_date && new Date(subscription.end_date) >= today
-          // Include if subscription starts in current year or future (upcoming subscriptions)
-          const isRelevant = subscriptionYear >= currentYear
-          matchesYear = isCurrentYear || isActive || isRelevant
-        } else if (yearFilter === "last_year") {
-          matchesYear = subscriptionDate.getFullYear() === currentYear - 1
-        } else if (yearFilter === "last_last_year") {
-          matchesYear = subscriptionDate.getFullYear() === currentYear - 2
-        } else {
-          // Specific year (numeric string)
-          const yearNum = parseInt(yearFilter)
-          if (!isNaN(yearNum)) {
-            matchesYear = subscriptionDate.getFullYear() === yearNum
-          }
-        }
-      }
-
-      return matchesSearch && matchesStatus && matchesPlan && matchesType && matchesMonth && matchesYear
+      return matchesSearch && matchesStatus && matchesPlan && matchesType && matchesDateRange
     })
   }
 
@@ -2018,10 +1916,13 @@ const SubscriptionMonitor = ({ userId }) => {
   const expiredSubscriptions = getExpiredSubscriptions()
   const cancelledSubscriptions = getCancelledSubscriptions()
 
-  // Helper functions for analytics - get subscriptions WITHOUT filters
+  // Helper functions for analytics - get subscriptions WITH date range filter applied
   const getAllActiveSubscriptions = () => {
     const now = new Date()
     return (subscriptions || []).filter((s) => {
+      // Apply date range filter first
+      if (!matchesDateRangeFilter(s)) return false
+      
       // Check if subscription is expired (end_date is in the past)
       const endDate = new Date(s.end_date)
       if (endDate < now) return false
@@ -2039,6 +1940,9 @@ const SubscriptionMonitor = ({ userId }) => {
     sevenDaysFromNow.setHours(23, 59, 59, 999)
 
     return (subscriptions || []).filter((s) => {
+      // Apply date range filter first
+      if (!matchesDateRangeFilter(s)) return false
+      
       const endDate = new Date(s.end_date)
       // Check if subscription is already expired (end_date is in the past)
       if (endDate < now) return false
@@ -2052,6 +1956,9 @@ const SubscriptionMonitor = ({ userId }) => {
   const getAllExpiredSubscriptions = () => {
     const now = new Date()
     return (subscriptions || []).filter((s) => {
+      // Apply date range filter first
+      if (!matchesDateRangeFilter(s)) return false
+      
       const endDate = new Date(s.end_date)
       return endDate < now && (s.display_status === "Active" || s.status_name === "approved")
     })
@@ -2059,6 +1966,9 @@ const SubscriptionMonitor = ({ userId }) => {
 
   const getAllCancelledSubscriptions = () => {
     return (subscriptions || []).filter((s) => {
+      // Apply date range filter first
+      if (!matchesDateRangeFilter(s)) return false
+      
       return s.status_name === "cancelled" || s.display_status === "Cancelled"
     })
   }
@@ -2085,7 +1995,7 @@ const SubscriptionMonitor = ({ userId }) => {
       expired: 1,
       cancelled: 1
     })
-  }, [searchQuery, statusFilter, planFilter, subscriptionTypeFilter, monthFilter, yearFilter])
+  }, [searchQuery, statusFilter, planFilter, subscriptionTypeFilter, startDate, endDate])
 
   // Get analytics - filtered by plan and subscription type if filters are set
   const getFilteredSubscriptionsByPlan = () => {
@@ -2103,8 +2013,8 @@ const SubscriptionMonitor = ({ userId }) => {
       filtered = filtered.filter((s) => s.is_guest_session !== true && s.subscription_type !== 'guest')
     }
     
-    // Apply month/year filter
-    filtered = filtered.filter((s) => matchesMonthYearFilter(s))
+    // Apply date range filter
+    filtered = filtered.filter((s) => matchesDateRangeFilter(s))
     
     return filtered
   }
@@ -2124,8 +2034,8 @@ const SubscriptionMonitor = ({ userId }) => {
       filtered = filtered.filter((s) => s.is_guest_session !== true && s.subscription_type !== 'guest')
     }
     
-    // Apply month/year filter
-    filtered = filtered.filter((s) => matchesMonthYearFilter(s))
+    // Apply date range filter
+    filtered = filtered.filter((s) => matchesDateRangeFilter(s))
     
     return filtered
   }
@@ -2399,48 +2309,45 @@ const SubscriptionMonitor = ({ userId }) => {
                     )}
                   </div>
 
-                  {/* Right side - Month and Year Filters */}
-                  <div className="flex items-center gap-4 flex-wrap">
-                    <Label htmlFor="active-month-filter">Month:</Label>
-                    <Select value={monthFilter} onValueChange={setMonthFilter}>
-                      <SelectTrigger className="w-40" id="active-month-filter">
-                        <SelectValue placeholder="All Months" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Months</SelectItem>
-                        <SelectItem value="this_month">This Month</SelectItem>
-                        <SelectItem value="last_3_months">Last 3 Months</SelectItem>
-                        <SelectItem value="1">January</SelectItem>
-                        <SelectItem value="2">February</SelectItem>
-                        <SelectItem value="3">March</SelectItem>
-                        <SelectItem value="4">April</SelectItem>
-                        <SelectItem value="5">May</SelectItem>
-                        <SelectItem value="6">June</SelectItem>
-                        <SelectItem value="7">July</SelectItem>
-                        <SelectItem value="8">August</SelectItem>
-                        <SelectItem value="9">September</SelectItem>
-                        <SelectItem value="10">October</SelectItem>
-                        <SelectItem value="11">November</SelectItem>
-                        <SelectItem value="12">December</SelectItem>
-                      </SelectContent>
-                    </Select>
-
-                    <Label htmlFor="active-year-filter">Year:</Label>
-                    <Select value={yearFilter} onValueChange={setYearFilter}>
-                      <SelectTrigger className="w-32" id="active-year-filter">
-                        <SelectValue placeholder="All Years" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Years</SelectItem>
-                        <SelectItem value="this_year">This Year</SelectItem>
-                        <SelectItem value="last_year">Last Year ({new Date().getFullYear() - 1})</SelectItem>
-                        <SelectItem value="last_last_year">{new Date().getFullYear() - 2}</SelectItem>
-                        <SelectItem value={new Date().getFullYear().toString()}>{new Date().getFullYear()}</SelectItem>
-                        <SelectItem value={(new Date().getFullYear() - 1).toString()}>{new Date().getFullYear() - 1}</SelectItem>
-                        <SelectItem value={(new Date().getFullYear() - 2).toString()}>{new Date().getFullYear() - 2}</SelectItem>
-                        <SelectItem value={(new Date().getFullYear() - 3).toString()}>{new Date().getFullYear() - 3}</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  {/* Right side - Date Range Filter */}
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <Label htmlFor="start-date-filter" className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4 text-slate-600" />
+                      Start Date:
+                    </Label>
+                    <Input
+                      type="date"
+                      id="start-date-filter"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="w-40 h-10 border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                      max={endDate || undefined}
+                    />
+                    <Label htmlFor="end-date-filter" className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4 text-slate-600" />
+                      End Date:
+                    </Label>
+                    <Input
+                      type="date"
+                      id="end-date-filter"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="w-40 h-10 border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                      min={startDate || undefined}
+                    />
+                    {(startDate || endDate) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setStartDate("")
+                          setEndDate("")
+                        }}
+                        className="h-10 px-3 text-xs"
+                      >
+                        Clear
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -2624,48 +2531,45 @@ const SubscriptionMonitor = ({ userId }) => {
                     )}
                   </div>
 
-                  {/* Right side - Month and Year Filters */}
-                  <div className="flex items-center gap-4 flex-wrap">
-                    <Label htmlFor="upcoming-month-filter">Month:</Label>
-                    <Select value={monthFilter} onValueChange={setMonthFilter}>
-                      <SelectTrigger className="w-40" id="upcoming-month-filter">
-                        <SelectValue placeholder="All Months" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Months</SelectItem>
-                        <SelectItem value="this_month">This Month</SelectItem>
-                        <SelectItem value="last_3_months">Last 3 Months</SelectItem>
-                        <SelectItem value="1">January</SelectItem>
-                        <SelectItem value="2">February</SelectItem>
-                        <SelectItem value="3">March</SelectItem>
-                        <SelectItem value="4">April</SelectItem>
-                        <SelectItem value="5">May</SelectItem>
-                        <SelectItem value="6">June</SelectItem>
-                        <SelectItem value="7">July</SelectItem>
-                        <SelectItem value="8">August</SelectItem>
-                        <SelectItem value="9">September</SelectItem>
-                        <SelectItem value="10">October</SelectItem>
-                        <SelectItem value="11">November</SelectItem>
-                        <SelectItem value="12">December</SelectItem>
-                      </SelectContent>
-                    </Select>
-
-                    <Label htmlFor="upcoming-year-filter">Year:</Label>
-                    <Select value={yearFilter} onValueChange={setYearFilter}>
-                      <SelectTrigger className="w-32" id="upcoming-year-filter">
-                        <SelectValue placeholder="All Years" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Years</SelectItem>
-                        <SelectItem value="this_year">This Year</SelectItem>
-                        <SelectItem value="last_year">Last Year ({new Date().getFullYear() - 1})</SelectItem>
-                        <SelectItem value="last_last_year">{new Date().getFullYear() - 2}</SelectItem>
-                        <SelectItem value={new Date().getFullYear().toString()}>{new Date().getFullYear()}</SelectItem>
-                        <SelectItem value={(new Date().getFullYear() - 1).toString()}>{new Date().getFullYear() - 1}</SelectItem>
-                        <SelectItem value={(new Date().getFullYear() - 2).toString()}>{new Date().getFullYear() - 2}</SelectItem>
-                        <SelectItem value={(new Date().getFullYear() - 3).toString()}>{new Date().getFullYear() - 3}</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  {/* Right side - Date Range Filter */}
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <Label htmlFor="upcoming-start-date-filter" className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4 text-slate-600" />
+                      Start Date:
+                    </Label>
+                    <Input
+                      type="date"
+                      id="upcoming-start-date-filter"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="w-40 h-10 border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                      max={endDate || undefined}
+                    />
+                    <Label htmlFor="upcoming-end-date-filter" className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4 text-slate-600" />
+                      End Date:
+                    </Label>
+                    <Input
+                      type="date"
+                      id="upcoming-end-date-filter"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="w-40 h-10 border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                      min={startDate || undefined}
+                    />
+                    {(startDate || endDate) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setStartDate("")
+                          setEndDate("")
+                        }}
+                        className="h-10 px-3 text-xs"
+                      >
+                        Clear
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -2849,48 +2753,45 @@ const SubscriptionMonitor = ({ userId }) => {
                     )}
                   </div>
 
-                  {/* Right side - Month and Year Filters */}
-                  <div className="flex items-center gap-4 flex-wrap">
-                    <Label htmlFor="expired-month-filter">Month:</Label>
-                    <Select value={monthFilter} onValueChange={setMonthFilter}>
-                      <SelectTrigger className="w-40" id="expired-month-filter">
-                        <SelectValue placeholder="All Months" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Months</SelectItem>
-                        <SelectItem value="this_month">This Month</SelectItem>
-                        <SelectItem value="last_3_months">Last 3 Months</SelectItem>
-                        <SelectItem value="1">January</SelectItem>
-                        <SelectItem value="2">February</SelectItem>
-                        <SelectItem value="3">March</SelectItem>
-                        <SelectItem value="4">April</SelectItem>
-                        <SelectItem value="5">May</SelectItem>
-                        <SelectItem value="6">June</SelectItem>
-                        <SelectItem value="7">July</SelectItem>
-                        <SelectItem value="8">August</SelectItem>
-                        <SelectItem value="9">September</SelectItem>
-                        <SelectItem value="10">October</SelectItem>
-                        <SelectItem value="11">November</SelectItem>
-                        <SelectItem value="12">December</SelectItem>
-                      </SelectContent>
-                    </Select>
-
-                    <Label htmlFor="expired-year-filter">Year:</Label>
-                    <Select value={yearFilter} onValueChange={setYearFilter}>
-                      <SelectTrigger className="w-32" id="expired-year-filter">
-                        <SelectValue placeholder="All Years" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Years</SelectItem>
-                        <SelectItem value="this_year">This Year</SelectItem>
-                        <SelectItem value="last_year">Last Year ({new Date().getFullYear() - 1})</SelectItem>
-                        <SelectItem value="last_last_year">{new Date().getFullYear() - 2}</SelectItem>
-                        <SelectItem value={new Date().getFullYear().toString()}>{new Date().getFullYear()}</SelectItem>
-                        <SelectItem value={(new Date().getFullYear() - 1).toString()}>{new Date().getFullYear() - 1}</SelectItem>
-                        <SelectItem value={(new Date().getFullYear() - 2).toString()}>{new Date().getFullYear() - 2}</SelectItem>
-                        <SelectItem value={(new Date().getFullYear() - 3).toString()}>{new Date().getFullYear() - 3}</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  {/* Right side - Date Range Filter */}
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <Label htmlFor="expired-start-date-filter" className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4 text-slate-600" />
+                      Start Date:
+                    </Label>
+                    <Input
+                      type="date"
+                      id="expired-start-date-filter"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="w-40 h-10 border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                      max={endDate || undefined}
+                    />
+                    <Label htmlFor="expired-end-date-filter" className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4 text-slate-600" />
+                      End Date:
+                    </Label>
+                    <Input
+                      type="date"
+                      id="expired-end-date-filter"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="w-40 h-10 border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                      min={startDate || undefined}
+                    />
+                    {(startDate || endDate) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setStartDate("")
+                          setEndDate("")
+                        }}
+                        className="h-10 px-3 text-xs"
+                      >
+                        Clear
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -3074,48 +2975,45 @@ const SubscriptionMonitor = ({ userId }) => {
                     )}
                   </div>
 
-                  {/* Right side - Month and Year Filters */}
-                  <div className="flex items-center gap-4 flex-wrap">
-                    <Label htmlFor="cancelled-month-filter">Month:</Label>
-                    <Select value={monthFilter} onValueChange={setMonthFilter}>
-                      <SelectTrigger className="w-40" id="cancelled-month-filter">
-                        <SelectValue placeholder="All Months" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Months</SelectItem>
-                        <SelectItem value="this_month">This Month</SelectItem>
-                        <SelectItem value="last_3_months">Last 3 Months</SelectItem>
-                        <SelectItem value="1">January</SelectItem>
-                        <SelectItem value="2">February</SelectItem>
-                        <SelectItem value="3">March</SelectItem>
-                        <SelectItem value="4">April</SelectItem>
-                        <SelectItem value="5">May</SelectItem>
-                        <SelectItem value="6">June</SelectItem>
-                        <SelectItem value="7">July</SelectItem>
-                        <SelectItem value="8">August</SelectItem>
-                        <SelectItem value="9">September</SelectItem>
-                        <SelectItem value="10">October</SelectItem>
-                        <SelectItem value="11">November</SelectItem>
-                        <SelectItem value="12">December</SelectItem>
-                      </SelectContent>
-                    </Select>
-
-                    <Label htmlFor="cancelled-year-filter">Year:</Label>
-                    <Select value={yearFilter} onValueChange={setYearFilter}>
-                      <SelectTrigger className="w-32" id="cancelled-year-filter">
-                        <SelectValue placeholder="All Years" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Years</SelectItem>
-                        <SelectItem value="this_year">This Year</SelectItem>
-                        <SelectItem value="last_year">Last Year ({new Date().getFullYear() - 1})</SelectItem>
-                        <SelectItem value="last_last_year">{new Date().getFullYear() - 2}</SelectItem>
-                        <SelectItem value={new Date().getFullYear().toString()}>{new Date().getFullYear()}</SelectItem>
-                        <SelectItem value={(new Date().getFullYear() - 1).toString()}>{new Date().getFullYear() - 1}</SelectItem>
-                        <SelectItem value={(new Date().getFullYear() - 2).toString()}>{new Date().getFullYear() - 2}</SelectItem>
-                        <SelectItem value={(new Date().getFullYear() - 3).toString()}>{new Date().getFullYear() - 3}</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  {/* Right side - Date Range Filter */}
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <Label htmlFor="cancelled-start-date-filter" className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4 text-slate-600" />
+                      Start Date:
+                    </Label>
+                    <Input
+                      type="date"
+                      id="cancelled-start-date-filter"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="w-40 h-10 border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                      max={endDate || undefined}
+                    />
+                    <Label htmlFor="cancelled-end-date-filter" className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4 text-slate-600" />
+                      End Date:
+                    </Label>
+                    <Input
+                      type="date"
+                      id="cancelled-end-date-filter"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="w-40 h-10 border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                      min={startDate || undefined}
+                    />
+                    {(startDate || endDate) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setStartDate("")
+                          setEndDate("")
+                        }}
+                        className="h-10 px-3 text-xs"
+                      >
+                        Clear
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>

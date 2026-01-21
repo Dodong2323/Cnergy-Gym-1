@@ -128,6 +128,13 @@ const ViewCoach = () => {
     monthly_rate: false,
   })
 
+  useEffect(() => {
+    setFormData((prev) => ({
+      ...prev,
+      specialty: selectedSpecialties.join(", "),
+    }))
+  }, [selectedSpecialties])
+
   const coachesPerPage = 5
   const indexOfLastCoach = currentPage * coachesPerPage
   const indexOfFirstCoach = indexOfLastCoach - coachesPerPage

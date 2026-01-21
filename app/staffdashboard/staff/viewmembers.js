@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import axios from "axios"
 import { formatDateToISO, safeDate, formatDateOnlyPH } from "@/lib/dateUtils"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -56,6 +56,7 @@ import {
   UserCircle,
   X,
   UserPlus,
+  FileText,
 } from "lucide-react"
 
 // Helper function to generate standard password from user's name
@@ -158,21 +159,77 @@ const ViewMembers = ({ userId }) => {
     }
   }
 
+  // Normalize parent consent file URL (similar to profile photos)
+  const normalizeConsentFileUrl = (url) => {
+    if (!url || typeof url !== 'string') return undefined
+
+    try {
+      // If it's already a full URL with serve_image.php, return as is
+      if (url.includes('serve_image.php')) {
+        return url
+      }
+
+      // If it's a full URL (http/https), return as is
+      if (url.startsWith('http://') || url.startsWith('https://')) {
+        return url
+      }
+
+      // Handle uploads/consents/ path (plural - this is the actual path used)
+      if (url.startsWith('uploads/consents/') || url.startsWith('uploads%2Fconsents%2F')) {
+        // Normalize the path - replace / with %2F
+        const normalizedPath = url.replace(/\//g, '%2F')
+        return `https://api.cnergy.site/serve_image.php?path=${normalizedPath}`
+      }
+
+      // Handle upload/consents/ path (singular - in case of typo or different path)
+      if (url.startsWith('upload/consents/') || url.startsWith('upload%2Fconsents%2F')) {
+        const normalizedPath = url.replace(/\//g, '%2F')
+        return `https://api.cnergy.site/serve_image.php?path=${normalizedPath}`
+      }
+
+      // Handle any uploads/ path (for other files in uploads/)
+      if (url.startsWith('uploads/') || url.startsWith('uploads%2F')) {
+        const normalizedPath = url.replace(/\//g, '%2F')
+        return `https://api.cnergy.site/serve_image.php?path=${normalizedPath}`
+      }
+
+      // Handle any upload/ path (singular)
+      if (url.startsWith('upload/') || url.startsWith('upload%2F')) {
+        const normalizedPath = url.replace(/\//g, '%2F')
+        return `https://api.cnergy.site/serve_image.php?path=${normalizedPath}`
+      }
+
+      // If it's just a filename (e.g., consent_1764060859_69256ebb19e68.jpeg), assume it's in uploads/consents/
+      if (url.match(/^consent_[a-zA-Z0-9_\-]+\.(jpg|jpeg|png|gif|webp|pdf)$/i)) {
+        const encodedPath = `uploads%2Fconsents%2F${encodeURIComponent(url)}`
+        return `https://api.cnergy.site/serve_image.php?path=${encodedPath}`
+      }
+
+      // If it's any other filename, try uploads/consents/ first
+      if (url.match(/^[a-zA-Z0-9_\-]+\.(jpg|jpeg|png|gif|webp|pdf)$/i)) {
+        const encodedPath = `uploads%2Fconsents%2F${encodeURIComponent(url)}`
+        return `https://api.cnergy.site/serve_image.php?path=${encodedPath}`
+      }
+
+      // Default: encode the entire URL (handles any other path format)
+      return `https://api.cnergy.site/serve_image.php?path=${encodeURIComponent(url)}`
+    } catch (error) {
+      console.error('Error normalizing consent file URL:', error)
+      return undefined
+    }
+  }
+
   const [members, setMembers] = useState([])
   const [filteredMembers, setFilteredMembers] = useState([])
   const [searchQuery, setSearchQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState("pending")
   const [discountFilter, setDiscountFilter] = useState("all") // "all", "student", "senior"
   const [sortBy, setSortBy] = useState("newest")
-  const [monthFilter, setMonthFilter] = useState("")
-  const [yearFilter, setYearFilter] = useState("")
+  const [startDate, setStartDate] = useState("")
+  const [endDate, setEndDate] = useState("")
   const [currentView, setCurrentView] = useState("active") // "active" or "archive"
   const [deactivationReasonFilter, setDeactivationReasonFilter] = useState("all") // "all", "account_sharing", "policy_violation", "inappropriate_behavior"
   const [userRole, setUserRole] = useState("admin") // Default to admin for admin dashboard
-
-  // Custom date picker states
-  const [customDate, setCustomDate] = useState(null)
-  const [useCustomDate, setUseCustomDate] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [selectedMember, setSelectedMember] = useState(null)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
@@ -184,6 +241,8 @@ const ViewMembers = ({ userId }) => {
   const [customDeactivationReason, setCustomDeactivationReason] = useState("")
   const [isRestoreDialogOpen, setIsRestoreDialogOpen] = useState(false)
   const [isErrorDialogOpen, setIsErrorDialogOpen] = useState(false)
+  const [isConsentImageModalOpen, setIsConsentImageModalOpen] = useState(false)
+  const [consentImageUrl, setConsentImageUrl] = useState("")
   const [errorDialogData, setErrorDialogData] = useState(null)
   const [showPassword, setShowPassword] = useState(false)
   const [showAgeRestrictionModal, setShowAgeRestrictionModal] = useState(false)
@@ -194,6 +253,20 @@ const ViewMembers = ({ userId }) => {
   const [currentPage, setCurrentPage] = useState(1)
   const membersPerPage = 5
   const { toast } = useToast()
+  const showClientToast = (title, description) =>
+    toast({
+      title,
+      description,
+      duration: 5000,
+    })
+  const showClientErrorToast = (description) =>
+    toast({
+      title: "Error",
+      description,
+      variant: "destructive",
+    })
+  const isCardActive = (status, view = "active") => statusFilter === status && currentView === view
+  const isAllCardActive = statusFilter === "all" && currentView === "active"
   
   // Discount management states
   const [memberDiscounts, setMemberDiscounts] = useState({}) // { userId: [{ discount_type, is_active, ... }] }
@@ -257,8 +330,29 @@ const ViewMembers = ({ userId }) => {
     }
   })
 
-  // Calculate discounted price using fixed amounts (same as monitorsubscription.js)
-  const calculateDiscountedPrice = (originalPrice, discountType) => {
+  // Calculate discounted price using plan-specific amounts
+  const calculateDiscountedPrice = (originalPrice, discountType, planId) => {
+    // Plan-specific discounts
+    if (planId === 2) {
+      // Premium plan (ID 2): Student = 149 discount (850 final from 999), Senior = 400 discount (599 final from 999)
+      if (discountType === 'student') {
+        return Math.max(0, originalPrice - 149)
+      } else if (discountType === 'senior') {
+        return Math.max(0, originalPrice - 400)
+      }
+      // For other discount types, use default discount
+      const discount = discountConfig[discountType]?.discount || 0
+      return Math.max(0, originalPrice - discount)
+    } else if (planId === 3) {
+      // Standard plan (ID 3): Student = 301 discount (999 final), Senior = 601 discount (699 final)
+      if (discountType === 'student') {
+        return Math.max(0, originalPrice - 301)
+      } else if (discountType === 'senior') {
+        return Math.max(0, originalPrice - 601)
+      }
+    }
+    
+    // For other plans (5), use default discounts
     const discount = discountConfig[discountType]?.discount || 0
     return Math.max(0, originalPrice - discount)
   }
@@ -335,6 +429,7 @@ const ViewMembers = ({ userId }) => {
     { value: "rejected", label: "Expired", color: "bg-red-50 text-red-700 border-red-200" },
     { value: "deactivated", label: "Deactivated", color: "bg-gray-50 text-gray-700 border-gray-200" },
   ]
+  const getStatusLabel = (status) => statusOptions.find((s) => s.value === status)?.label || status
 
   const validateEmail = async (email, excludeId = null) => {
     try {
@@ -363,11 +458,7 @@ const ViewMembers = ({ userId }) => {
       setFilteredMembers(Array.isArray(data) ? data : [])
     } catch (error) {
       console.error("Error fetching members:", error)
-      toast({
-        title: "Error",
-        description: "Failed to fetch members. Please check your connection and try again.",
-        variant: "destructive",
-      })
+      showClientErrorToast("Unable to load the client list. Please check your connection and try again.")
       setMembers([])
       setFilteredMembers([])
     } finally {
@@ -456,21 +547,16 @@ const ViewMembers = ({ userId }) => {
       
       const result = await response.json()
       if (result.success) {
-        toast({
-          title: "Success",
-          description: `Tagged ${discountDialogMember.fname} ${discountDialogMember.lname} as ${discountType === 'student' ? 'Student' : 'Senior (55+)'}`,
-        })
+      const clientName = formatName(`${discountDialogMember.fname} ${discountDialogMember.mname || ''} ${discountDialogMember.lname}`).trim()
+      const discountLabel = discountType === "student" ? "Student" : "Senior (55+)"
+      showClientToast("Discount applied", `${clientName} now has the ${discountLabel} discount.`)
         await fetchMemberDiscounts(discountDialogMember.id)
         await fetchAllMemberDiscounts() // Refresh all discounts
       } else {
         throw new Error(result.error || 'Failed to add discount')
       }
     } catch (error) {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to add discount tag",
-        variant: "destructive",
-      })
+      showClientErrorToast(error.message || "Failed to add the discount tag")
     } finally {
       setDiscountLoading(false)
     }
@@ -494,21 +580,14 @@ const ViewMembers = ({ userId }) => {
       
       const result = await response.json()
       if (result.success) {
-        toast({
-          title: "Success",
-          description: "Discount tag removed successfully",
-        })
+        showClientToast("Discount removed", "The discount tag has been removed successfully.")
         await fetchMemberDiscounts(discountDialogMember.id)
         await fetchAllMemberDiscounts() // Refresh all discounts
       } else {
         throw new Error(result.error || 'Failed to remove discount')
       }
     } catch (error) {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to remove discount tag",
-        variant: "destructive",
-      })
+      showClientErrorToast(error.message || "Failed to remove the discount tag")
     } finally {
       setDiscountLoading(false)
     }
@@ -644,51 +723,33 @@ const ViewMembers = ({ userId }) => {
       })
     }
 
-    // Filter by custom date (takes priority over month/year filters)
-    if (useCustomDate && customDate) {
-      const customDateStr = format(customDate, "yyyy-MM-dd")
+    // Filter by date range
+    if (startDate || endDate) {
       filtered = filtered.filter((member) => {
         if (!member.created_at) return false
         const createdDate = safeDate(member.created_at)
         if (!createdDate) return false
 
-        const memberDateStr = format(createdDate, "yyyy-MM-dd")
-        return memberDateStr === customDateStr
+        const memberDate = new Date(createdDate)
+        memberDate.setHours(0, 0, 0, 0)
+
+        let matchesStart = true
+        let matchesEnd = true
+
+        if (startDate) {
+          const filterStartDate = new Date(startDate)
+          filterStartDate.setHours(0, 0, 0, 0)
+          matchesStart = memberDate >= filterStartDate
+        }
+
+        if (endDate) {
+          const filterEndDate = new Date(endDate)
+          filterEndDate.setHours(0, 0, 0, 0)
+          matchesEnd = memberDate <= filterEndDate
+        }
+
+        return matchesStart && matchesEnd
       })
-    } else {
-      // Filter by month/year (only if custom date is not used)
-      if (monthFilter && monthFilter !== "all" && yearFilter && yearFilter !== "all") {
-        filtered = filtered.filter((member) => {
-          if (!member.created_at) return false
-          const createdDate = safeDate(member.created_at)
-          if (!createdDate) return false
-
-          const memberMonth = createdDate.getMonth() + 1 // getMonth() returns 0-11
-          const memberYear = createdDate.getFullYear()
-
-          return memberMonth === parseInt(monthFilter) && memberYear === parseInt(yearFilter)
-        })
-      } else if (monthFilter && monthFilter !== "all") {
-        // Filter by month only
-        filtered = filtered.filter((member) => {
-          if (!member.created_at) return false
-          const createdDate = safeDate(member.created_at)
-          if (!createdDate) return false
-
-          const memberMonth = createdDate.getMonth() + 1
-          return memberMonth === parseInt(monthFilter)
-        })
-      } else if (yearFilter && yearFilter !== "all") {
-        // Filter by year only
-        filtered = filtered.filter((member) => {
-          if (!member.created_at) return false
-          const createdDate = safeDate(member.created_at)
-          if (!createdDate) return false
-
-          const memberYear = createdDate.getFullYear()
-          return memberYear === parseInt(yearFilter)
-        })
-      }
     }
 
     // Sort the filtered results
@@ -714,7 +775,73 @@ const ViewMembers = ({ userId }) => {
     setFilteredMembers(filtered)
     setCurrentPage(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery, statusFilter, discountFilter, sortBy, monthFilter, yearFilter, members, currentView, customDate, useCustomDate, memberDiscounts, deactivationReasonFilter])
+  }, [searchQuery, statusFilter, discountFilter, sortBy, startDate, endDate, members, currentView, memberDiscounts, deactivationReasonFilter])
+
+  // Filtered members for card counts - respects date range, search, and discount filters but NOT status/view filters
+  const membersForCardCounts = useMemo(() => {
+    let filtered = [...members]
+
+    // Filter by search query
+    if (searchQuery.trim() !== "") {
+      const lowercaseQuery = searchQuery.toLowerCase()
+      filtered = filtered.filter(
+        (member) =>
+          `${member.fname} ${member.lname}`.toLowerCase().includes(lowercaseQuery) ||
+          member.email?.toLowerCase().includes(lowercaseQuery),
+      )
+    }
+
+    // Filter by discount type
+    if (discountFilter !== "all") {
+      filtered = filtered.filter((member) => {
+        const activeDiscount = getActiveDiscount(member.id)
+        if (!activeDiscount) {
+          return false
+        }
+        
+        const discountType = activeDiscount.discount_type
+        
+        if (discountFilter === "student") {
+          return discountType === "student"
+        } else if (discountFilter === "senior") {
+          return discountType === "senior"
+        }
+        
+        return false
+      })
+    }
+
+    // Filter by date range
+    if (startDate || endDate) {
+      filtered = filtered.filter((member) => {
+        if (!member.created_at) return false
+        const createdDate = safeDate(member.created_at)
+        if (!createdDate) return false
+
+        const memberDate = new Date(createdDate)
+        memberDate.setHours(0, 0, 0, 0)
+
+        let matchesStart = true
+        let matchesEnd = true
+
+        if (startDate) {
+          const filterStartDate = new Date(startDate)
+          filterStartDate.setHours(0, 0, 0, 0)
+          matchesStart = memberDate >= filterStartDate
+        }
+
+        if (endDate) {
+          const filterEndDate = new Date(endDate)
+          filterEndDate.setHours(0, 0, 0, 0)
+          matchesEnd = memberDate <= filterEndDate
+        }
+
+        return matchesStart && matchesEnd
+      })
+    }
+
+    return filtered
+  }, [members, searchQuery, discountFilter, startDate, endDate, memberDiscounts])
 
   const indexOfLastMember = currentPage * membersPerPage
   const indexOfFirstMember = indexOfLastMember - membersPerPage
@@ -808,6 +935,46 @@ const ViewMembers = ({ userId }) => {
 
   const handleUpdateAccountStatus = async (status) => {
     if (!selectedMember) return
+    
+    // If approving, close verification dialog and open Add Client modal in subscription assignment mode
+    if (status === "approved") {
+      // Close verification dialog
+      setIsVerificationDialogOpen(false)
+      
+      // Store pending client data with approval flow flag
+      setPendingClientData({
+        ...selectedMember,
+        isApprovalFlow: true, // Flag to indicate this is from approval flow
+        memberId: selectedMember.id // Store the member ID for approval
+      })
+      
+      // Open Add Client dialog and switch to subscription assignment mode
+      setIsAddDialogOpen(true)
+      setShowSubscriptionAssignment(true)
+      
+      // Fetch ALL subscription plans (use 0 to get all plans, same as Add Client flow)
+      // During approval, we should be able to assign any plan including member-only plans
+      await fetchSubscriptionPlansForUser(0)
+      
+      // Reset subscription form
+      setSubscriptionForm({
+        selected_plan_ids: [],
+        start_date: new Date().toISOString().split("T")[0],
+        discount_type: "none",
+        amount_paid: "",
+        payment_method: "cash",
+        amount_received: "",
+        gcash_reference: "",
+        notes: ""
+      })
+      setPlanQuantities({})
+      
+      // Clear selected member
+      setSelectedMember(null)
+      return
+    }
+    
+    // For other statuses (rejected, etc.), proceed with direct update
     setIsLoading(true)
 
     try {
@@ -839,29 +1006,14 @@ const ViewMembers = ({ userId }) => {
         setSelectedMember(null)
         
         // Improved toast messages based on status
-        if (status === "approved") {
-          toast({
-            title: "Account Approved",
-            description: `${clientName}'s account has been approved and is now active. They can now access the web and mobile application.`,
-            duration: 5000,
-          })
-        } else {
-          toast({
-            title: "Status Updated",
-            description: `${clientName}'s account status has been updated to ${status}.`,
-            duration: 5000,
-          })
-        }
+        const statusLabel = getStatusLabel(status)
+        showClientToast("Status updated", `${clientName}'s account is now ${statusLabel}.`)
       } else {
         throw new Error(result.message || "Failed to update account status")
       }
     } catch (error) {
       console.error("Error updating account status:", error)
-      toast({
-        title: "Error",
-        description: "Failed to update account status. Please try again.",
-        variant: "destructive",
-      })
+      showClientErrorToast("Failed to update the account status. Please try again.")
     }
     setIsLoading(false)
   }
@@ -1046,7 +1198,8 @@ const ViewMembers = ({ userId }) => {
           if (prev.discount_type && prev.discount_type !== 'none' && prev.discount_type !== 'regular') {
             const selectedPlanIdNum = parseInt(selectedPlanId)
             if (selectedPlanIdNum == 2 || selectedPlanIdNum == 3 || selectedPlanIdNum == 5) {
-              pricePerUnit = calculateDiscountedPrice(basePrice, prev.discount_type)
+              const selectedPlanIdNum = parseInt(selectedPlanId)
+              pricePerUnit = calculateDiscountedPrice(basePrice, prev.discount_type, selectedPlanIdNum)
             }
           }
           
@@ -1084,7 +1237,8 @@ const ViewMembers = ({ userId }) => {
           let pricePerUnit = basePrice
           if (prev.discount_type && prev.discount_type !== 'none' && prev.discount_type !== 'regular') {
             if (selectedPlanId == 2 || selectedPlanId == 3 || selectedPlanId == 5) {
-              pricePerUnit = calculateDiscountedPrice(basePrice, prev.discount_type)
+              const selectedPlanIdNum = parseInt(selectedPlanId)
+              pricePerUnit = calculateDiscountedPrice(basePrice, prev.discount_type, selectedPlanIdNum)
             }
           }
           
@@ -1113,7 +1267,8 @@ const ViewMembers = ({ userId }) => {
           let pricePerUnit = basePrice
           if (prev.discount_type && prev.discount_type !== 'none' && prev.discount_type !== 'regular') {
             if (selectedPlanId == 2 || selectedPlanId == 3 || selectedPlanId == 5) {
-              pricePerUnit = calculateDiscountedPrice(basePrice, prev.discount_type)
+              const selectedPlanIdNum = parseInt(selectedPlanId)
+              pricePerUnit = calculateDiscountedPrice(basePrice, prev.discount_type, selectedPlanIdNum)
             }
           }
           
@@ -1175,83 +1330,114 @@ const ViewMembers = ({ userId }) => {
 
     setSubscriptionLoading(true)
     try {
-      // Step 1: Create the client account
-      // Use FormData if there's a consent file, otherwise use JSON
-      let requestBody
-      let headers
+      let newMemberId
       
-      if (pendingClientData.parent_consent_file) {
-        const formData = new FormData()
-        Object.keys(pendingClientData).forEach(key => {
-          if (key === 'parent_consent_file') {
-            formData.append('parent_consent_file', pendingClientData[key])
-          } else {
-            formData.append(key, pendingClientData[key])
-          }
+      // Check if this is an approval flow
+      if (pendingClientData.isApprovalFlow && pendingClientData.memberId) {
+        // Step 1: Approve the existing account
+        const approveResponse = await fetch(`https://api.cnergy.site/member_management.php?id=${pendingClientData.memberId}`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            id: pendingClientData.memberId,
+            account_status: "approved",
+            staff_id: userId,
+          }),
         })
-        requestBody = formData
-        // Don't set Content-Type header - browser will set it with boundary for FormData
-        headers = {}
-      } else {
-        requestBody = JSON.stringify(pendingClientData)
-        headers = {
-          "Content-Type": "application/json",
-        }
-      }
-      
-      const clientResponse = await fetch("https://api.cnergy.site/member_management.php", {
-        method: "POST",
-        headers: headers,
-        body: requestBody,
-      })
 
-      if (!clientResponse.ok) {
-        let result
-        try {
-          const contentType = clientResponse.headers.get("content-type")
-          if (contentType && contentType.includes("application/json")) {
-            result = await clientResponse.json()
-          } else {
-            const text = await clientResponse.text()
-            result = { error: "Server error", message: text || "Failed to create client account" }
-          }
-        } catch (parseError) {
-          result = { 
-            error: "Response parse error", 
-            message: `Failed to parse server response. Status: ${clientResponse.status}` 
+        if (!approveResponse.ok) {
+          const approveResult = await approveResponse.json()
+          throw new Error(approveResult.message || "Failed to approve account")
+        }
+
+        // Use the existing member ID
+        newMemberId = pendingClientData.memberId
+      } else {
+        // Step 1: Create the client account
+        // Use FormData if there's a consent file, otherwise use JSON
+        let requestBody
+        let headers
+        
+        if (pendingClientData.parent_consent_file) {
+          const formData = new FormData()
+          Object.keys(pendingClientData).forEach(key => {
+            if (key === 'parent_consent_file' || key === 'isApprovalFlow' || key === 'memberId') {
+              if (key === 'parent_consent_file') {
+                formData.append('parent_consent_file', pendingClientData[key])
+              }
+              // Skip isApprovalFlow and memberId - these are only for frontend logic
+            } else {
+              formData.append(key, pendingClientData[key])
+            }
+          })
+          requestBody = formData
+          // Don't set Content-Type header - browser will set it with boundary for FormData
+          headers = {}
+        } else {
+          // Remove isApprovalFlow and memberId from the data before sending
+          const { isApprovalFlow, memberId, ...clientData } = pendingClientData
+          requestBody = JSON.stringify(clientData)
+          headers = {
+            "Content-Type": "application/json",
           }
         }
         
-        if (clientResponse.status === 409) {
-          setErrorDialogData({
-            title: result.error || "Duplicate Entry Detected",
-            message: result.message || "This client already exists in the system.",
-            duplicateType: result.duplicate_type || "unknown",
-            existingUser: result.existing_user || null
-          })
-          setIsErrorDialogOpen(true)
-          setSubscriptionLoading(false)
-          return
-        }
-        throw new Error(result.message || result.error || "Failed to create client account")
-      }
+        const clientResponse = await fetch("https://api.cnergy.site/member_management.php", {
+          method: "POST",
+          headers: headers,
+          body: requestBody,
+        })
 
-      let clientResult
-      try {
-        const contentType = clientResponse.headers.get("content-type")
-        if (contentType && contentType.includes("application/json")) {
-          clientResult = await clientResponse.json()
-        } else {
-          const text = await clientResponse.text()
-          throw new Error(`Unexpected response format: ${text}`)
+        if (!clientResponse.ok) {
+          let result
+          try {
+            const contentType = clientResponse.headers.get("content-type")
+            if (contentType && contentType.includes("application/json")) {
+              result = await clientResponse.json()
+            } else {
+              const text = await clientResponse.text()
+              result = { error: "Server error", message: text || "Failed to create client account" }
+            }
+          } catch (parseError) {
+            result = { 
+              error: "Response parse error", 
+              message: `Failed to parse server response. Status: ${clientResponse.status}` 
+            }
+          }
+          
+          if (clientResponse.status === 409) {
+            setErrorDialogData({
+              title: result.error || "Duplicate Entry Detected",
+              message: result.message || "This client already exists in the system.",
+              duplicateType: result.duplicate_type || "unknown",
+              existingUser: result.existing_user || null
+            })
+            setIsErrorDialogOpen(true)
+            setSubscriptionLoading(false)
+            return
+          }
+          throw new Error(result.message || result.error || "Failed to create client account")
         }
-      } catch (parseError) {
-        throw new Error(`Failed to parse server response: ${parseError.message}`)
-      }
-      const newMemberId = clientResult.member?.id || clientResult.data?.id || null
 
-      if (!newMemberId) {
-        throw new Error("Failed to get client ID after account creation")
+        let clientResult
+        try {
+          const contentType = clientResponse.headers.get("content-type")
+          if (contentType && contentType.includes("application/json")) {
+            clientResult = await clientResponse.json()
+          } else {
+            const text = await clientResponse.text()
+            throw new Error(`Unexpected response format: ${text}`)
+          }
+        } catch (parseError) {
+          throw new Error(`Failed to parse server response: ${parseError.message}`)
+        }
+        newMemberId = clientResult.member?.id || clientResult.data?.id || null
+
+        if (!newMemberId) {
+          throw new Error("Failed to get client ID after account creation")
+        }
       }
 
       // Step 2: Add discount tag if selected
@@ -1312,7 +1498,7 @@ const ViewMembers = ({ userId }) => {
         // Apply discount if applicable
         if (subscriptionForm.discount_type && subscriptionForm.discount_type !== 'none' && subscriptionForm.discount_type !== 'regular') {
           if (planId == 2 || planId == 3 || planId == 5) {
-            planPrice = calculateDiscountedPrice(planPrice, subscriptionForm.discount_type)
+            planPrice = calculateDiscountedPrice(planPrice, subscriptionForm.discount_type, planId)
           }
         }
         
@@ -1386,11 +1572,18 @@ const ViewMembers = ({ userId }) => {
         const fullName = `${pendingClientData.fname}${pendingClientData.mname ? ` ${pendingClientData.mname}` : ''} ${pendingClientData.lname}`.trim()
         
         const planCount = subscriptionForm.selected_plan_ids.length
-        toast({
-          title: "Success",
-          description: `${fullName} has been created and ${planCount} ${planCount === 1 ? 'subscription' : 'subscriptions'} assigned successfully!`,
-          duration: 5000,
-        })
+        const planLabel = planCount === 1 ? "subscription" : "subscriptions"
+        if (pendingClientData.isApprovalFlow) {
+          showClientToast(
+            "Account approved",
+            `${fullName}'s account is approved and ${planCount} ${planLabel} assigned successfully.`,
+          )
+        } else {
+          showClientToast(
+            "Client setup complete",
+            `${fullName} has been created and ${planCount} ${planLabel} assigned successfully.`,
+          )
+        }
         
         // Close modal and reset everything
         setIsAddDialogOpen(false)
@@ -1407,7 +1600,11 @@ const ViewMembers = ({ userId }) => {
           notes: ""
         })
         setPlanQuantities({})
-        form.reset()
+        
+        // Only reset form if it's not an approval flow
+        if (!pendingClientData.isApprovalFlow) {
+          form.reset()
+        }
         
         // Refresh members list
         const getResponse = await fetch("https://api.cnergy.site/member_management.php")
@@ -1420,11 +1617,7 @@ const ViewMembers = ({ userId }) => {
       }
     } catch (error) {
       console.error("Error creating account and subscription:", error)
-      toast({
-        title: "Error",
-        description: error.response?.data?.error || error.message || "Failed to create account and subscription. Please try again.",
-        variant: "destructive",
-      })
+      showClientErrorToast(error.response?.data?.error || error.message || "Failed to create the account and subscriptions. Please try again.")
     } finally {
       setSubscriptionLoading(false)
     }
@@ -1511,20 +1704,13 @@ const ViewMembers = ({ userId }) => {
         setFilteredMembers(Array.isArray(updatedMembers) ? updatedMembers : [])
         setIsEditDialogOpen(false)
         setSelectedMember(null)
-        toast({
-          title: "Success",
-          description: "Client updated successfully!",
-        })
+        showClientToast("Client updated", "Client profile has been updated successfully.")
       } else {
         throw new Error(result.error || result.message || "Failed to update client")
       }
     } catch (error) {
       console.error("Error updating member:", error)
-      toast({
-        title: "Error",
-        description: error.message || "Failed to update client. Please try again.",
-        variant: "destructive",
-      })
+      showClientErrorToast(error.message || "Failed to update the client. Please try again.")
     }
     setIsLoading(false)
   }
@@ -1730,13 +1916,14 @@ const ViewMembers = ({ userId }) => {
               }}
             >
               <CardContent className="flex flex-col items-center justify-center p-4 relative">
+                <div className={`absolute inset-x-0 top-0 h-1 ${isAllCardActive ? "bg-primary" : "bg-transparent"}`}></div>
                 <div className="absolute top-0 right-0 w-20 h-20 bg-gray-200 rounded-full -mr-10 -mt-10 opacity-20 group-hover:opacity-30 transition-opacity"></div>
                 <div className="p-2.5 rounded-lg bg-gradient-to-br from-gray-800 to-gray-900 mb-2 shadow-sm group-hover:scale-105 transition-transform relative z-10">
                   <Users className="h-4 w-4 text-white" />
                 </div>
                 <div className="relative z-10 text-center">
                   <p className="text-2xl font-bold text-gray-900 mb-0.5">
-                    {members.filter((m) => m.account_status === "approved").length}
+                    {membersForCardCounts.filter((m) => m.account_status === "approved").length}
                   </p>
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Clients</p>
                 </div>
@@ -1750,13 +1937,14 @@ const ViewMembers = ({ userId }) => {
               }}
             >
               <CardContent className="flex flex-col items-center justify-center p-4 relative">
+                <div className={`absolute inset-x-0 top-0 h-1 ${isCardActive("pending") ? "bg-primary" : "bg-transparent"}`}></div>
                 <div className="absolute top-0 right-0 w-20 h-20 bg-orange-100 rounded-full -mr-10 -mt-10 opacity-20 group-hover:opacity-30 transition-opacity"></div>
                 <div className="p-2.5 rounded-lg bg-gradient-to-br from-orange-100 to-orange-200 mb-2 shadow-sm group-hover:scale-105 transition-transform relative z-10">
                   <Clock className="h-4 w-4 text-orange-700" />
                 </div>
                 <div className="relative z-10 text-center">
                   <p className="text-2xl font-bold text-orange-600 mb-0.5">
-                    {members.filter((m) => m.account_status === "pending").length}
+                    {membersForCardCounts.filter((m) => m.account_status === "pending").length}
                   </p>
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Pending</p>
                 </div>
@@ -1770,13 +1958,14 @@ const ViewMembers = ({ userId }) => {
               }}
             >
               <CardContent className="flex flex-col items-center justify-center p-4 relative">
+                <div className={`absolute inset-x-0 top-0 h-1 ${isCardActive("approved") ? "bg-primary" : "bg-transparent"}`}></div>
                 <div className="absolute top-0 right-0 w-20 h-20 bg-green-100 rounded-full -mr-10 -mt-10 opacity-20 group-hover:opacity-30 transition-opacity"></div>
                 <div className="p-2.5 rounded-lg bg-gradient-to-br from-green-100 to-green-200 mb-2 shadow-sm group-hover:scale-105 transition-transform relative z-10">
                   <CheckCircle className="h-4 w-4 text-green-700" />
                 </div>
                 <div className="relative z-10 text-center">
                   <p className="text-2xl font-bold text-green-700 mb-0.5">
-                    {members.filter((m) => m.account_status === "approved").length}
+                    {membersForCardCounts.filter((m) => m.account_status === "approved").length}
                   </p>
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Approved</p>
                 </div>
@@ -1790,13 +1979,14 @@ const ViewMembers = ({ userId }) => {
               }}
             >
               <CardContent className="flex flex-col items-center justify-center p-4 relative">
+                <div className={`absolute inset-x-0 top-0 h-1 ${isCardActive("rejected") ? "bg-primary" : "bg-transparent"}`}></div>
                 <div className="absolute top-0 right-0 w-20 h-20 bg-red-100 rounded-full -mr-10 -mt-10 opacity-20 group-hover:opacity-30 transition-opacity"></div>
                 <div className="p-2.5 rounded-lg bg-gradient-to-br from-red-100 to-red-200 mb-2 shadow-sm group-hover:scale-105 transition-transform relative z-10">
                   <XCircle className="h-4 w-4 text-red-700" />
                 </div>
                 <div className="relative z-10 text-center">
                   <p className="text-2xl font-bold text-red-700 mb-0.5">
-                    {members.filter((m) => m.account_status === "rejected").length}
+                    {membersForCardCounts.filter((m) => m.account_status === "rejected").length}
                   </p>
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Expired</p>
                 </div>
@@ -1810,13 +2000,14 @@ const ViewMembers = ({ userId }) => {
               }}
             >
               <CardContent className="flex flex-col items-center justify-center p-4 relative">
+                <div className={`absolute inset-x-0 top-0 h-1 ${isCardActive("deactivated", "archive") ? "bg-primary" : "bg-transparent"}`}></div>
                 <div className="absolute top-0 right-0 w-20 h-20 bg-slate-100 rounded-full -mr-10 -mt-10 opacity-20 group-hover:opacity-30 transition-opacity"></div>
                 <div className="p-2.5 rounded-lg bg-gradient-to-br from-slate-100 to-slate-200 mb-2 shadow-sm group-hover:scale-105 transition-transform relative z-10">
                   <PowerOff className="h-4 w-4 text-slate-700" />
                 </div>
                 <div className="relative z-10 text-center">
                   <p className="text-2xl font-bold text-slate-700 mb-0.5">
-                    {members.filter((m) => m.account_status === "deactivated").length}
+                    {membersForCardCounts.filter((m) => m.account_status === "deactivated").length}
                   </p>
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Deactivated</p>
                 </div>
@@ -1881,6 +2072,7 @@ const ViewMembers = ({ userId }) => {
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
+            {currentView !== "active" && (
             <Select value={statusFilter} onValueChange={setStatusFilter}>
               <SelectTrigger className="w-48 h-11 border-gray-300 focus:border-primary focus:ring-2 focus:ring-primary/20">
                 <SelectValue placeholder="Filter by status" />
@@ -1892,6 +2084,7 @@ const ViewMembers = ({ userId }) => {
                 <SelectItem value="rejected">Expired</SelectItem>
               </SelectContent>
             </Select>
+            )}
             {currentView === "archive" && (
               <Select value={deactivationReasonFilter} onValueChange={setDeactivationReasonFilter}>
                 <SelectTrigger className="w-56 h-11 border-gray-300 focus:border-primary focus:ring-2 focus:ring-primary/20">
@@ -1916,87 +2109,6 @@ const ViewMembers = ({ userId }) => {
                 <SelectItem value="senior">👤 Senior (55+) Discount</SelectItem>
               </SelectContent>
             </Select>
-            <Select value={monthFilter} onValueChange={setMonthFilter}>
-              <SelectTrigger className="w-36 h-11 border-gray-300 focus:border-primary focus:ring-2 focus:ring-primary/20">
-                <SelectValue placeholder="Month" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Months</SelectItem>
-                <SelectItem value="1">January</SelectItem>
-                <SelectItem value="2">February</SelectItem>
-                <SelectItem value="3">March</SelectItem>
-                <SelectItem value="4">April</SelectItem>
-                <SelectItem value="5">May</SelectItem>
-                <SelectItem value="6">June</SelectItem>
-                <SelectItem value="7">July</SelectItem>
-                <SelectItem value="8">August</SelectItem>
-                <SelectItem value="9">September</SelectItem>
-                <SelectItem value="10">October</SelectItem>
-                <SelectItem value="11">November</SelectItem>
-                <SelectItem value="12">December</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={yearFilter} onValueChange={setYearFilter}>
-              <SelectTrigger className="w-28 h-11 border-gray-300 focus:border-primary focus:ring-2 focus:ring-primary/20">
-                <SelectValue placeholder="Year" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Years</SelectItem>
-                <SelectItem value="2024">2024</SelectItem>
-                <SelectItem value="2023">2023</SelectItem>
-                <SelectItem value="2022">2022</SelectItem>
-                <SelectItem value="2021">2021</SelectItem>
-                <SelectItem value="2020">2020</SelectItem>
-              </SelectContent>
-            </Select>
-
-            {/* Custom Date Picker */}
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button
-                  variant={useCustomDate ? "default" : "outline"}
-                  className={cn(
-                    "w-[220px] justify-start text-left font-medium h-11 border-2 transition-all duration-200",
-                    useCustomDate
-                      ? "bg-primary hover:bg-primary/90 text-white border-primary shadow-md"
-                      : "bg-white hover:bg-gray-50 text-gray-700 border-gray-300 hover:border-primary/50"
-                  )}
-                >
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {customDate ? format(customDate, "MMM dd, yyyy") : "Pick specific date"}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0 shadow-2xl border-gray-200" align="start">
-                <Calendar
-                  mode="single"
-                  selected={customDate}
-                  onSelect={(date) => {
-                    setCustomDate(date)
-                    setUseCustomDate(!!date)
-                    // Clear month/year filters when custom date is selected
-                    if (date) {
-                      setMonthFilter("")
-                      setYearFilter("")
-                    }
-                  }}
-                  initialFocus
-                />
-              </PopoverContent>
-            </Popover>
-
-            {useCustomDate && customDate && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setCustomDate(null)
-                  setUseCustomDate(false)
-                }}
-                className="h-11 px-3 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200 hover:border-red-300 transition-all duration-200 font-medium"
-              >
-                ✕ Clear Date
-              </Button>
-            )}
             <Select value={sortBy} onValueChange={setSortBy}>
               <SelectTrigger className="w-48 h-11 border-gray-300 focus:border-primary focus:ring-2 focus:ring-primary/20">
                 <SelectValue placeholder="Sort by" />
@@ -2010,6 +2122,44 @@ const ViewMembers = ({ userId }) => {
                 <SelectItem value="email_desc">Email Z-A</SelectItem>
               </SelectContent>
             </Select>
+            {/* Date Range Filter */}
+            <Label htmlFor="start-date-filter" className="flex items-center gap-2 whitespace-nowrap">
+              <CalendarIcon className="h-4 w-4 text-slate-600" />
+              Start Date:
+            </Label>
+            <Input
+              type="date"
+              id="start-date-filter"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="w-40 h-11 border-gray-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+              max={endDate || undefined}
+            />
+            <Label htmlFor="end-date-filter" className="flex items-center gap-2 whitespace-nowrap">
+              <CalendarIcon className="h-4 w-4 text-slate-600" />
+              End Date:
+            </Label>
+            <Input
+              type="date"
+              id="end-date-filter"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="w-40 h-11 border-gray-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+              min={startDate || undefined}
+            />
+            {(startDate || endDate) && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setStartDate("")
+                  setEndDate("")
+                }}
+                className="h-11 px-3 text-xs"
+              >
+                Clear
+              </Button>
+            )}
           </div>
 
           {isLoading ? (
@@ -2305,6 +2455,90 @@ const ViewMembers = ({ userId }) => {
                       {getStatusBadge(selectedMember.account_status)}
                     </div>
                   </div>
+                  
+                  {/* Parent Consent File - Show if user is under 18 and has consent file */}
+                  {(() => {
+                    console.log('🔵 [DEBUG] Checking parent consent for member:', selectedMember.id)
+                    console.log('🔵 [DEBUG] Birthday:', selectedMember.bday)
+                    console.log('🔵 [DEBUG] Parent consent URL:', selectedMember.parent_consent_file_url)
+                    
+                    if (!selectedMember.bday) {
+                      console.log('🔵 [DEBUG] No birthday, returning null')
+                      return null
+                    }
+                    
+                    const today = new Date()
+                    const birthDate = new Date(selectedMember.bday)
+                    const age = today.getFullYear() - birthDate.getFullYear()
+                    const monthDiff = today.getMonth() - birthDate.getMonth()
+                    const dayDiff = today.getDate() - birthDate.getDate()
+                    const exactAge = monthDiff < 0 || (monthDiff === 0 && dayDiff < 0) ? age - 1 : age
+                    
+                    console.log('🔵 [DEBUG] Calculated age:', exactAge)
+                    console.log('🔵 [DEBUG] Is under 18?', exactAge < 18)
+                    console.log('🔵 [DEBUG] Has consent file?', !!selectedMember.parent_consent_file_url)
+                    
+                    if (exactAge < 18 && selectedMember.parent_consent_file_url) {
+                      const normalizedConsentUrl = normalizeConsentFileUrl(selectedMember.parent_consent_file_url)
+                      
+                      console.log('🔵 [DEBUG] Rendering parent consent image:', normalizedConsentUrl)
+                      console.log('🔵 [DEBUG] Original URL:', selectedMember.parent_consent_file_url)
+                      
+                      if (!normalizedConsentUrl) {
+                        console.log('🔵 [DEBUG] Failed to normalize consent URL')
+                        return null
+                      }
+                      
+                      return (
+                        <div className="col-span-2 space-y-2 mt-4 pt-4 border-t border-gray-200">
+                          <Label className="text-sm font-medium flex items-center gap-2">
+                            <FileText className="h-4 w-4 text-orange-600" />
+                            Parent Consent Document
+                          </Label>
+                          <div className="mt-2 border border-gray-200 rounded-lg overflow-hidden bg-white hover:border-gray-300 transition-colors group shadow-sm">
+                            <div className="relative">
+                              <img 
+                                src={normalizedConsentUrl} 
+                                alt="Parent Consent Document" 
+                                className="w-full h-auto max-h-[500px] object-contain cursor-zoom-in hover:opacity-90 transition-opacity"
+                                onClick={() => {
+                                  setConsentImageUrl(normalizedConsentUrl)
+                                  setIsConsentImageModalOpen(true)
+                                }}
+                                onError={(e) => {
+                                  console.log('🔵 [DEBUG] Image failed to load, URL:', normalizedConsentUrl)
+                                  e.target.style.display = 'none'
+                                  const errorDiv = e.target.nextElementSibling
+                                  if (errorDiv) {
+                                    errorDiv.style.display = 'flex'
+                                  }
+                                }}
+                                onLoad={() => console.log('🔵 [DEBUG] Image loaded successfully:', normalizedConsentUrl)}
+                              />
+                              <div className="hidden flex-col items-center justify-center p-8 text-center text-gray-500 min-h-[200px]">
+                                <FileText className="h-12 w-12 mx-auto mb-3 text-gray-400" />
+                                <p className="text-sm font-medium mb-2">Unable to load image</p>
+                                <a 
+                                  href={normalizedConsentUrl} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  className="text-blue-600 hover:underline text-sm"
+                                >
+                                  Try opening in new tab
+                                </a>
+                              </div>
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors pointer-events-none"></div>
+                            </div>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                            <span>Click image to view in full size</span>
+                          </p>
+                        </div>
+                      )
+                    }
+                    console.log('🔵 [DEBUG] Not showing parent consent - age:', exactAge, 'has file:', !!selectedMember.parent_consent_file_url)
+                    return null
+                  })()}
                 </div>
               </div>
             </div>
@@ -2321,19 +2555,10 @@ const ViewMembers = ({ userId }) => {
             <Button 
               onClick={() => handleUpdateAccountStatus("approved")} 
               disabled={isLoading}
-              className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white shadow-md hover:shadow-lg transition-all duration-200 px-6"
+              className="bg-black hover:bg-black/90 text-white"
             >
-              {isLoading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                <>
-                  <CheckCircle className="mr-2 h-4 w-4" />
-                  Approve
-                </>
-              )}
+              <User className="mr-2 h-4 w-4" />
+              Proceed
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2341,7 +2566,7 @@ const ViewMembers = ({ userId }) => {
 
       {/* View Client Dialog */}
       <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
-        <DialogContent className="sm:max-w-lg" hideClose>
+        <DialogContent className="sm:max-w-2xl max-w-[95vw] max-h-[90vh] overflow-y-auto" hideClose>
           <DialogHeader className="space-y-3 pb-4 border-b">
             <DialogTitle className="flex items-center text-2xl font-semibold">
               <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10 mr-3">
@@ -2440,6 +2665,76 @@ const ViewMembers = ({ userId }) => {
                               }
                             </span>
                           </div>
+                        </div>
+                      )
+                    }
+                    return null
+                  })()}
+                  
+                  {/* Parent Consent File - Show if user is under 18 and has consent file */}
+                  {(() => {
+                    if (!selectedMember.bday || !selectedMember.parent_consent_file_url) {
+                      return null
+                    }
+                    
+                    const today = new Date()
+                    const birthDate = new Date(selectedMember.bday)
+                    const age = today.getFullYear() - birthDate.getFullYear()
+                    const monthDiff = today.getMonth() - birthDate.getMonth()
+                    const dayDiff = today.getDate() - birthDate.getDate()
+                    const exactAge = monthDiff < 0 || (monthDiff === 0 && dayDiff < 0) ? age - 1 : age
+                    
+                    if (exactAge < 18 && selectedMember.parent_consent_file_url) {
+                      const normalizedConsentUrl = normalizeConsentFileUrl(selectedMember.parent_consent_file_url)
+                      
+                      if (!normalizedConsentUrl) {
+                        return null
+                      }
+                      
+                      return (
+                        <div className="col-span-2 space-y-2 mt-4 pt-4 border-t border-gray-200">
+                          <Label className="text-sm font-medium flex items-center gap-2">
+                            <FileText className="h-4 w-4 text-orange-600" />
+                            Parent Consent Document
+                          </Label>
+                          <div className="mt-2 border border-gray-200 rounded-lg overflow-hidden bg-white hover:border-gray-300 transition-colors group shadow-sm">
+                            <div className="relative">
+                              <img 
+                                src={normalizedConsentUrl} 
+                                alt="Parent Consent Document" 
+                                className="w-full h-auto max-h-[500px] object-contain cursor-zoom-in hover:opacity-90 transition-opacity"
+                                onClick={() => {
+                                  setConsentImageUrl(normalizedConsentUrl)
+                                  setIsConsentImageModalOpen(true)
+                                }}
+                                onError={(e) => {
+                                  console.log('🔵 [DEBUG] Image failed to load, URL:', normalizedConsentUrl)
+                                  e.target.style.display = 'none'
+                                  const errorDiv = e.target.nextElementSibling
+                                  if (errorDiv) {
+                                    errorDiv.style.display = 'flex'
+                                  }
+                                }}
+                                onLoad={() => console.log('🔵 [DEBUG] Image loaded successfully:', normalizedConsentUrl)}
+                              />
+                              <div className="hidden flex-col items-center justify-center p-8 text-center text-gray-500 min-h-[200px]">
+                                <FileText className="h-12 w-12 mx-auto mb-3 text-gray-400" />
+                                <p className="text-sm font-medium mb-2">Unable to load image</p>
+                                <a 
+                                  href={normalizedConsentUrl} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  className="text-blue-600 hover:underline text-sm"
+                                >
+                                  Try opening in new tab
+                                </a>
+                              </div>
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors pointer-events-none"></div>
+                            </div>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                            <span>Click image to view in full size</span>
+                          </p>
                         </div>
                       )
                     }
@@ -2876,10 +3171,12 @@ const ViewMembers = ({ userId }) => {
                   </div>
                   <div className="flex-1">
                     <p className="text-sm font-semibold text-gray-900">
-                      {pendingClientData ? `${pendingClientData.fname} ${pendingClientData.lname}` : 'New User'}
+                      {pendingClientData ? `${pendingClientData.fname} ${pendingClientData.mname || ''} ${pendingClientData.lname}`.trim() : 'New User'}
                     </p>
                     <p className="text-xs text-gray-600 mt-0.5">
-                      Complete the form below to create the account
+                      {pendingClientData?.isApprovalFlow 
+                        ? "Complete the form below to approve the account and assign subscription"
+                        : "Complete the form below to create the account"}
                     </p>
                   </div>
                 </div>
@@ -2913,7 +3210,8 @@ const ViewMembers = ({ userId }) => {
                             let pricePerUnit = basePrice
                             if (newDiscount !== 'none' && newDiscount !== 'regular') {
                               if (selectedPlanId == 2 || selectedPlanId == 3 || selectedPlanId == 5) {
-                                pricePerUnit = calculateDiscountedPrice(basePrice, newDiscount)
+                                const selectedPlanIdNum = parseInt(selectedPlanId)
+                                pricePerUnit = calculateDiscountedPrice(basePrice, newDiscount, selectedPlanIdNum)
                               }
                             }
                             
@@ -2955,7 +3253,8 @@ const ViewMembers = ({ userId }) => {
                             let pricePerUnit = basePrice
                             if (newDiscount !== 'none' && newDiscount !== 'regular') {
                               if (selectedPlanId == 2 || selectedPlanId == 3 || selectedPlanId == 5) {
-                                pricePerUnit = calculateDiscountedPrice(basePrice, newDiscount)
+                                const selectedPlanIdNum = parseInt(selectedPlanId)
+                                pricePerUnit = calculateDiscountedPrice(basePrice, newDiscount, selectedPlanIdNum)
                               }
                             }
                             
@@ -3110,8 +3409,8 @@ const ViewMembers = ({ userId }) => {
                                                subscriptionForm.discount_type !== 'none' && 
                                                subscriptionForm.discount_type !== 'regular'
                         
-                        const discountAmount = discountApplies ? (discountConfig[subscriptionForm.discount_type]?.discount || 0) : 0
-                        const pricePerUnit = discountApplies ? calculateDiscountedPrice(basePrice, subscriptionForm.discount_type) : basePrice
+                        const pricePerUnit = discountApplies ? calculateDiscountedPrice(basePrice, subscriptionForm.discount_type, planId) : basePrice
+                        const discountAmount = discountApplies ? (basePrice - pricePerUnit) : 0
                         const subtotal = basePrice * quantity
                         const discountTotal = discountAmount * quantity
                         const finalPrice = pricePerUnit * quantity
@@ -3165,10 +3464,14 @@ const ViewMembers = ({ userId }) => {
                       {subscriptionForm.discount_type && subscriptionForm.discount_type !== 'none' && subscriptionForm.discount_type !== 'regular' && (
                         (() => {
                           const totalDiscount = subscriptionForm.selected_plan_ids.reduce((sum, planIdStr) => {
+                            const plan = subscriptionPlans.find(p => p.id.toString() === planIdStr)
+                            if (!plan) return sum
                             const planId = parseInt(planIdStr)
                             const quantity = planQuantities[planIdStr] || 1
                             if (planId === 2 || planId === 3 || planId === 5) {
-                              const discountAmount = discountConfig[subscriptionForm.discount_type]?.discount || 0
+                              const basePrice = parseFloat(plan.price || 0)
+                              const discountedPrice = calculateDiscountedPrice(basePrice, subscriptionForm.discount_type, planId)
+                              const discountAmount = basePrice - discountedPrice
                               return sum + (discountAmount * quantity)
                             }
                             return sum
@@ -3189,6 +3492,26 @@ const ViewMembers = ({ userId }) => {
                         <span className="text-base font-semibold text-gray-900">Total</span>
                         <span className="text-lg font-bold text-gray-900">₱{parseFloat(subscriptionForm.amount_paid || 0).toFixed(2)}</span>
                       </div>
+                      {/* Payment Summary Section */}
+                      {subscriptionForm.payment_method === "cash" && subscriptionForm.amount_received && parseFloat(subscriptionForm.amount_received) > 0 && (
+                        <>
+                          <div className="flex items-center justify-between pt-2 mt-2 border-t-2 border-gray-400">
+                            <span className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Payment Summary</span>
+                          </div>
+                          <div className="flex items-center justify-between pt-1">
+                            <span className="text-sm font-medium text-gray-700">Amount Received</span>
+                            <span className="text-sm font-semibold text-gray-900">₱{parseFloat(subscriptionForm.amount_received || 0).toFixed(2)}</span>
+                          </div>
+                          {parseFloat(subscriptionForm.amount_received || 0) > parseFloat(subscriptionForm.amount_paid || 0) && (
+                            <div className="flex items-center justify-between pt-1 pb-1 bg-gray-100 -mx-2 px-2 rounded">
+                              <span className="text-sm font-semibold text-gray-900">Change</span>
+                              <span className="text-base font-bold text-gray-900">₱{(
+                                Math.max(0, parseFloat(subscriptionForm.amount_received || 0) - parseFloat(subscriptionForm.amount_paid || 0))
+                              ).toFixed(2)}</span>
+                            </div>
+                          )}
+                        </>
+                      )}
                     </div>
                   </div>
                 )}
@@ -3263,6 +3586,37 @@ const ViewMembers = ({ userId }) => {
                   type="button"
                   variant="outline"
                   onClick={() => {
+                    if (pendingClientData?.isApprovalFlow) {
+                      // If in approval flow, go back to verification dialog
+                      setIsAddDialogOpen(false)
+                      setShowSubscriptionAssignment(false)
+                      const memberId = pendingClientData.memberId
+                      const member = members.find(m => m.id === memberId)
+                      if (member) {
+                        setSelectedMember(member)
+                        setIsVerificationDialogOpen(true)
+                      }
+                      setPendingClientData(null)
+                      setPlanQuantities({})
+                      setSubscriptionForm({
+                        plan_id: "",
+                        start_date: new Date().toISOString().split("T")[0],
+                        discount_type: "none",
+                        amount_paid: "",
+                        payment_method: "cash",
+                        amount_received: "",
+                        notes: ""
+                      })
+                      return
+                    }
+
+                    if (showSubscriptionAssignment) {
+                      // Go back to client info edit without closing dialog
+                      setShowSubscriptionAssignment(false)
+                      return
+                    }
+
+                    // Regular cancel - close modal completely
                     setIsAddDialogOpen(false)
                     setShowSubscriptionAssignment(false)
                     setPendingClientData(null)
@@ -3275,12 +3629,12 @@ const ViewMembers = ({ userId }) => {
                       amount_received: "",
                       notes: ""
                     })
-                    setPlanQuantity(1)
+                    setPlanQuantities({})
                     form.reset()
                   }}
                   className="h-11 px-6"
                 >
-                  Cancel
+                  {showSubscriptionAssignment ? "Back" : "Cancel"}
                 </Button>
                 <Button
                   type="button"
@@ -3308,7 +3662,7 @@ const ViewMembers = ({ userId }) => {
 
       {/* Edit Client Dialog */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="sm:max-w-2xl max-w-[95vw] max-h-[90vh] overflow-y-auto">
           <DialogHeader className="space-y-3 pb-4 border-b">
             <DialogTitle className="text-2xl font-semibold flex items-center gap-2">
               <Edit className="h-6 w-6 text-primary" />
@@ -3470,6 +3824,77 @@ const ViewMembers = ({ userId }) => {
                   )
                 }}
               />
+              
+              {/* Parent Consent File Display - Show if user is under 18 and has consent file */}
+              {(() => {
+                if (!selectedMember?.bday || !selectedMember?.parent_consent_file_url) {
+                  return null
+                }
+                
+                const today = new Date()
+                const birthDate = new Date(selectedMember.bday)
+                const age = today.getFullYear() - birthDate.getFullYear()
+                const monthDiff = today.getMonth() - birthDate.getMonth()
+                const dayDiff = today.getDate() - birthDate.getDate()
+                const exactAge = monthDiff < 0 || (monthDiff === 0 && dayDiff < 0) ? age - 1 : age
+                
+                if (exactAge < 18 && selectedMember.parent_consent_file_url) {
+                  const normalizedConsentUrl = normalizeConsentFileUrl(selectedMember.parent_consent_file_url)
+                  
+                  if (!normalizedConsentUrl) {
+                    return null
+                  }
+                  
+                  return (
+                    <div className="space-y-2 pt-4 border-t border-gray-200">
+                      <Label className="text-sm font-medium flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-orange-600" />
+                        Parent Consent Document
+                      </Label>
+                      <div className="mt-2 border-2 border-orange-200 rounded-lg overflow-hidden bg-gray-50 hover:border-orange-300 transition-colors group">
+                        <div className="relative">
+                          <img 
+                            src={normalizedConsentUrl} 
+                            alt="Parent Consent Document" 
+                            className="w-full h-auto max-h-[500px] object-contain cursor-zoom-in hover:opacity-90 transition-opacity"
+                            onClick={() => {
+                              setConsentImageUrl(normalizedConsentUrl)
+                              setIsConsentImageModalOpen(true)
+                            }}
+                            onError={(e) => {
+                              console.log('🔵 [DEBUG] Image failed to load, URL:', normalizedConsentUrl)
+                              e.target.style.display = 'none'
+                              const errorDiv = e.target.nextElementSibling
+                              if (errorDiv) {
+                                errorDiv.style.display = 'flex'
+                              }
+                            }}
+                            onLoad={() => console.log('🔵 [DEBUG] Image loaded successfully:', normalizedConsentUrl)}
+                          />
+                          <div className="hidden flex-col items-center justify-center p-8 text-center text-gray-500 min-h-[200px]">
+                            <FileText className="h-12 w-12 mx-auto mb-3 text-gray-400" />
+                            <p className="text-sm font-medium mb-2">Unable to load image</p>
+                            <a 
+                              href={normalizedConsentUrl} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:underline text-sm"
+                            >
+                              Try opening in new tab
+                            </a>
+                          </div>
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors pointer-events-none"></div>
+                        </div>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                        <span>Click image to view in full size</span>
+                      </p>
+                    </div>
+                  )
+                }
+                return null
+              })()}
+              
               <DialogFooter className="pt-4 border-t gap-3">
                 <Button
                   type="button"
@@ -4105,6 +4530,55 @@ const ViewMembers = ({ userId }) => {
               Close
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Parent Consent Image Modal */}
+      <Dialog open={isConsentImageModalOpen} onOpenChange={setIsConsentImageModalOpen}>
+        <DialogContent 
+          className="p-0 bg-white border shadow-lg w-auto h-auto max-w-[98vw] max-h-[98vh]"
+          hideClose
+        >
+          <DialogHeader className="sr-only">
+            <DialogTitle>Parent Consent Document</DialogTitle>
+          </DialogHeader>
+          <div className="relative inline-block">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="absolute top-2 right-2 z-10 bg-white/90 hover:bg-white rounded-full h-8 w-8 shadow-lg border border-gray-200"
+              onClick={() => setIsConsentImageModalOpen(false)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+            {consentImageUrl && (
+              <img 
+                src={consentImageUrl} 
+                alt="Parent Consent Document - Full Size" 
+                className="max-w-[98vw] max-h-[98vh] w-auto h-auto object-contain block"
+                onError={(e) => {
+                  console.log('🔵 [DEBUG] Image failed to load in modal, URL:', consentImageUrl)
+                  e.target.style.display = 'none'
+                  const errorDiv = e.target.nextElementSibling
+                  if (errorDiv) {
+                    errorDiv.style.display = 'flex'
+                  }
+                }}
+              />
+            )}
+            <div className="hidden flex-col items-center justify-center p-12 text-center text-gray-500 min-h-[400px] bg-white rounded-lg">
+              <FileText className="h-16 w-16 mx-auto mb-4 text-gray-400" />
+              <p className="text-base font-medium mb-3">Unable to load image</p>
+              <a 
+                href={consentImageUrl} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:underline"
+              >
+                Try opening in new tab
+              </a>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

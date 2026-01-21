@@ -49,11 +49,12 @@ $decodedPath = str_replace('\\', '/', $decodedPath);
 
 // Security: Only allow images from uploads directory
 $allowedDirectories = [
-    'uploads/merchandise/', 
-    'uploads/announcements/', 
+    'uploads/merchandise/',
+    'uploads/announcements/',
     'uploads/promotions/',
     'uploads/avatars/',  // Allow profile photos (avatars)
-    'uploads/profile/'   // Allow profile photos (profile directory)
+    'uploads/profile/',  // Allow profile photos (profile directory)
+    'uploads/consents/'  // Allow parent consent documents
 ];
 $isAllowed = false;
 

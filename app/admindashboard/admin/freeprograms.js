@@ -189,7 +189,53 @@ const FreePrograms = () => {
     console.error(defaultMessage, error)
   }
 
+  const validateExerciseInputs = () => {
+    for (const exerciseId of selectedExercises) {
+      const exercise = exercises.find((ex) => ex.id === exerciseId)
+      const details = exerciseDetails[exerciseId] || {}
+      const exerciseName = exercise?.name || "selected exercise"
+      const sets = parseInt(details.sets || 0)
+
+      if (!sets || sets <= 0) {
+        return `Please enter the number of sets for ${exerciseName}.`
+      }
+
+      if (sets === 1) {
+        if (!details.reps) {
+          return `Enter reps for ${exerciseName}.`
+        }
+      } else {
+        const repsPerSet = details.repsPerSet || []
+        for (let index = 0; index < sets; index += 1) {
+          if (!repsPerSet[index]) {
+            return `Enter reps for set ${index + 1} of ${exerciseName}.`
+          }
+        }
+      }
+    }
+
+    return null
+  }
+
   const handleSaveProgram = async () => {
+    console.debug("FreePrograms: saving program with exercises", {
+      name: programName,
+      exercises: selectedExercises.map((exerciseId) => {
+        const exercise = exercises.find((ex) => ex.id === exerciseId)
+        return {
+          id: exerciseId,
+          name: exercise?.name,
+          sets: exerciseDetails[exerciseId]?.sets,
+          reps: exerciseDetails[exerciseId]?.reps,
+          repsPerSet: exerciseDetails[exerciseId]?.repsPerSet,
+        }
+      }),
+    })
+    const validationError = validateExerciseInputs()
+    if (validationError) {
+      setError(validationError)
+      return
+    }
     if (!programName.trim()) {
       setError("Program name is required")
       return
@@ -502,6 +548,13 @@ const FreePrograms = () => {
     setDraggedIndex(null)
     setDragOverIndex(null)
   }
+
+  useEffect(() => {
+    if (dialogOpen && !selectedProgram) {
+      setSelectedExercises([])
+      setExerciseDetails({})
+    }
+  }, [dialogOpen, selectedProgram])
 
   // Filter exercises based on selected muscle group and search query
   const getFilteredExercises = () => {

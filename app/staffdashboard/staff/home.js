@@ -5,6 +5,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Bar, BarChart, Line, LineChart, ResponsiveContainer, XAxis, YAxis, CartesianGrid } from "recharts"
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Button } from "@/components/ui/button"
 import { format } from "date-fns"
 import { Users, CreditCard, UserCheck, AlertTriangle, Calendar, TrendingUp, TrendingDown } from "lucide-react"
 
@@ -75,20 +78,23 @@ const GymDashboard = () => {
     upcomingExpirations: { value: 0, trend: 0, isPositive: true },
   })
   const [revenueData, setRevenueData] = useState([])
-  const [timePeriod, setTimePeriod] = useState("today")
+  const [startDate, setStartDate] = useState("")
+  const [endDate, setEndDate] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [retryCount, setRetryCount] = useState(0)
 
-  const fetchDashboardData = useCallback(async (period = timePeriod, isRetry = false) => {
+  const fetchDashboardData = useCallback(async (isRetry = false) => {
     setLoading(true)
     setError(null)
 
     try {
+      // Always use "today" period for API - we'll filter data client-side based on date range
+      // The API doesn't support custom date ranges, so we fetch all data and filter on frontend
+      let period = "today"
       let apiUrl = `https://api.cnergy.site/admindashboard.php?period=${period}`
 
-      // Don't send date parameter to API - we'll filter client-side
-      console.log("Fetching data for period:", period, "URL:", apiUrl)
+      console.log("Fetching data for date range:", { startDate, endDate }, "URL:", apiUrl)
 
       const response = await axios.get(apiUrl, {
         timeout: 10000 // 10 second timeout
@@ -114,28 +120,24 @@ const GymDashboard = () => {
       if (!isRetry && retryCount < 3) {
         setTimeout(() => {
           setRetryCount(prev => prev + 1)
-          fetchDashboardData(period, true)
+          fetchDashboardData(true)
         }, 2000 * (retryCount + 1)) // Exponential backoff
       }
     } finally {
       setLoading(false)
     }
-  }, [timePeriod, retryCount])
+  }, [startDate, endDate, retryCount])
 
   const handleRetry = () => {
     setRetryCount(0)
-    fetchDashboardData(timePeriod)
+    fetchDashboardData()
   }
 
   useEffect(() => {
-    console.log("useEffect triggered - Period:", timePeriod)
-    fetchDashboardData(timePeriod)
+    console.log("useEffect triggered - Date Range:", { startDate, endDate })
+    fetchDashboardData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timePeriod])
-
-  const handleTimePeriodChange = (value) => {
-    setTimePeriod(value)
-  }
+  }, [startDate, endDate])
 
   // Custom formatters
   const formatCurrency = (value) => {
@@ -212,22 +214,45 @@ const GymDashboard = () => {
                 Welcome to the CNERGY Gym Admin Dashboard – Manage Staff, Members, Coaches, and Operations!
               </CardDescription>
             </div>
-            <div className="flex flex-wrap items-center gap-4">
-              <div className="flex items-center gap-2">
-                <Calendar className="h-4 w-4 text-muted-foreground" />
-                <Select value={timePeriod} onValueChange={handleTimePeriodChange}>
-                  <SelectTrigger className="w-[140px]">
-                    <SelectValue placeholder="Period" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="today">Today</SelectItem>
-                    <SelectItem value="week">This Week</SelectItem>
-                    <SelectItem value="month">This Month</SelectItem>
-                    <SelectItem value="year">This Year</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Date Range Filter */}
+              <Label htmlFor="start-date-filter" className="flex items-center gap-2 whitespace-nowrap">
+                <Calendar className="h-4 w-4 text-gray-600" />
+                Start Date:
+              </Label>
+              <Input
+                type="date"
+                id="start-date-filter"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-40 h-10 border-gray-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                max={endDate || undefined}
+              />
+              <Label htmlFor="end-date-filter" className="flex items-center gap-2 whitespace-nowrap">
+                <Calendar className="h-4 w-4 text-gray-600" />
+                End Date:
+              </Label>
+              <Input
+                type="date"
+                id="end-date-filter"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="w-40 h-10 border-gray-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                min={startDate || undefined}
+              />
+              {(startDate || endDate) && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setStartDate("")
+                    setEndDate("")
+                  }}
+                  className="h-10 px-3 text-xs"
+                >
+                  Clear
+                </Button>
+              )}
             </div>
           </div>
         </CardHeader>

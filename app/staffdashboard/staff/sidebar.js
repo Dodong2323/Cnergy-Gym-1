@@ -66,7 +66,7 @@ const Sidebar = ({
     { name: "ViewClients", icon: <FaUsers className="mr-2 h-4 w-4" /> },
     { name: "ViewCoach", icon: <GiWhistle className="mr-2 h-4 w-4" /> },
     { name: "MonitorSubscriptions", icon: <FaClipboardList className="mr-2 h-4 w-4" /> },
-    { name: "Product Checkout", icon: <FaShoppingCart className="mr-2 h-4 w-4" /> },
+    { name: "Sales", icon: <FaShoppingCart className="mr-2 h-4 w-4" /> },
     { name: "AttendanceTracking", icon: <FaCheckCircle className="mr-2 h-4 w-4" /> },
     { name: "CoachAssignments", icon: <FaTasks className="mr-2 h-4 w-4" /> },
     { name: "Exercises", icon: <FaDumbbell className="mr-2 h-4 w-4" /> },
@@ -106,11 +106,11 @@ const Sidebar = ({
               variant={activeSection === name ? "secondary" : "ghost"}
               className={`w-full mb-1 ${collapsed ? 'lg:justify-center lg:px-2' : 'justify-start'}`}
               onClick={() => handleSectionClick(name)}
-              title={collapsed ? (name === "ViewClients" ? "View Client" : name === "Product Checkout" ? "Product Checkout" : name.replace(/([A-Z])/g, " $1").trim()) : ""}
+            title={collapsed ? (name === "ViewClients" ? "View Client" : name === "Sales" ? "Sales" : name.replace(/([A-Z])/g, " $1").trim()) : ""}
             >
               {icon}
               <span className={`text-sm font-medium truncate ${collapsed ? 'lg:hidden' : ''}`}>
-                {name === "ViewClients" ? "View Client" : name === "Product Checkout" ? "Product Checkout" : name.replace(/([A-Z])/g, " $1").trim()}
+                {name === "ViewClients" ? "View Client" : name === "Sales" ? "Sales" : name.replace(/([A-Z])/g, " $1").trim()}
               </span>
             </Button>
           ))}
